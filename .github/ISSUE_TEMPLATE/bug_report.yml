@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem with Kidbot
+description: Report a reproducible problem with Chiki
 title: "[Bug]: "
 labels: ["bug"]
 body:

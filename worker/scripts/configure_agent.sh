@@ -1,5 +1,5 @@
 #!/bin/bash
-# Create or update the canonical Kidbot ElevenLabs agent configuration.
+# Create or update the canonical Chiki ElevenLabs agent configuration.
 # Usage: ./scripts/configure_agent.sh [private|diagnostics] [blocking|prompt|off]
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -115,7 +115,7 @@ BODY=$(jq -n \
   --argjson content "$ENABLE_CONTENT" '
   def category($on): {is_enabled:$on, threshold:"medium"};
   {
-    name:"kidbot-chiki",
+    name:"chiki",
     conversation_config: {
       asr: {quality:"high", provider:"scribe_realtime", user_input_audio_format:"pcm_16000", keywords:[]},
       tts: {model_id:"eleven_v3_conversational", voice_id:$voice_id,

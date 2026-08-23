@@ -2,7 +2,7 @@
 
 ## Supported board
 
-Kidbot v0.1.0 is verified on the **Waveshare ESP32-S3-Touch-AMOLED-1.8 V2**. It uses the board's AMOLED display and touch controller plus its onboard microphone, speaker, and ES8311 audio codec.
+Chiki v0.1.0 is verified on the **Waveshare ESP32-S3-Touch-AMOLED-1.8 V2**. It uses the board's AMOLED display and touch controller plus its onboard microphone, speaker, and ES8311 audio codec.
 
 Waveshare documents different display and touch controllers for V1 and V2. V1 is therefore **unverified**, not assumed compatible. Check the revision printed on the board and compare it with the [official Waveshare documentation](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8).
 
@@ -12,7 +12,7 @@ Waveshare documents different display and touch controllers for V1 and V2. V1 is
 - Data-capable USB-C cable
 - Computer with a USB serial device visible
 - [ESP-IDF 5.5.4](https://docs.espressif.com/projects/esp-idf/en/v5.5.4/esp32s3/get-started/)
-- A deployed Kidbot Worker and matching device token
+- A deployed Chiki Worker and matching device token
 
 ## Credentials
 

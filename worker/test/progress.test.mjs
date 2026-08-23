@@ -30,7 +30,7 @@ test('requires a meaningful child turn followed by a topical response', () => {
   ]), false);
 });
 
-test('accepts only enabled, completed Kidbot transcription fixtures', () => {
+test('accepts only enabled, completed Chiki transcription fixtures', () => {
   const event = {
     type: 'post_call_transcription', event_timestamp: 1_800_000_000,
     data: {

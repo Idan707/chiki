@@ -34,7 +34,7 @@ This Code of Conduct applies in project spaces and when an individual officially
 
 ## Enforcement
 
-Report abusive, harassing, or otherwise unacceptable behavior privately through the project's [security advisory form](https://github.com/Idan707/kidbot/security/advisories/new). Reports will be reviewed promptly and fairly. Maintainers must respect the reporter's privacy and security.
+Report abusive, harassing, or otherwise unacceptable behavior privately through the project's [security advisory form](https://github.com/Idan707/chiki/security/advisories/new). Reports will be reviewed promptly and fairly. Maintainers must respect the reporter's privacy and security.
 
 ## Enforcement guidelines
 

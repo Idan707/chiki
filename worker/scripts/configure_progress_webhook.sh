@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time/re-runnable provisioning for Kidbot's signed post-call webhook.
+# One-time/re-runnable provisioning for Chiki's signed post-call webhook.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -9,7 +9,7 @@ WORKER_URL=$(dev_var WORKER_URL)
 [ -n "$KEY" ] || { echo "ELEVENLABS_API_KEY missing from .dev.vars" >&2; exit 1; }
 [[ "$WORKER_URL" == https://* ]] ||
   { echo "WORKER_URL must be an https:// origin in .dev.vars" >&2; exit 1; }
-NAME="Kidbot progress"
+NAME="Chiki progress"
 URL="${WORKER_URL%/}/webhooks/elevenlabs"
 BASE="https://api.elevenlabs.io/v1/workspace/webhooks"
 

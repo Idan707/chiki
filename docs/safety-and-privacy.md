@@ -1,6 +1,6 @@
 # Safety and privacy
 
-Kidbot is experimental software for an adult to build and supervise. It is not a certified toy, medical device, emergency service, educational authority, or substitute for a parent or guardian. This document describes implementation choices; it makes no legal-compliance claim.
+Chiki is experimental software for an adult to build and supervise. It is not a certified toy, medical device, emergency service, educational authority, or substitute for a parent or guardian. This document describes implementation choices; it makes no legal-compliance claim.
 
 ## Interaction defaults
 
@@ -23,7 +23,7 @@ device -- bearer token --> Worker /progress --> local NVS cache
 
 Cloudflare processes authentication, session counters, and normalized progress. ElevenLabs processes live audio, transcription, agent inference, synthesized speech, and configured post-call analysis. Your network provider and hosting region may add other processing paths. Review the providers' current terms, data locations, subprocessors, and account settings before use.
 
-## What Kidbot stores
+## What Chiki stores
 
 The Worker progress store is intentionally narrow: normalized topic IDs, Jerusalem-local dates, aggregate counts, a revision, the latest topic, and short-lived conversation-ID hashes for deduplication. Only the fixed allowlist in `worker/src/progress.mjs` is accepted.
 
@@ -55,4 +55,4 @@ Useful regulatory design references include the [FTC COPPA rule](https://www.ftc
 
 ## Reporting a security or safety issue
 
-Do not publish vulnerabilities, exposed child data, transcripts, recordings, or secrets in a GitHub issue. Use [GitHub private vulnerability reporting](https://github.com/Idan707/kidbot/security/advisories/new). See [SECURITY.md](../SECURITY.md).
+Do not publish vulnerabilities, exposed child data, transcripts, recordings, or secrets in a GitHub issue. Use [GitHub private vulnerability reporting](https://github.com/Idan707/chiki/security/advisories/new). See [SECURITY.md](../SECURITY.md).

@@ -1,6 +1,6 @@
 # Architecture
 
-Kidbot separates local interaction, session authorization, cloud conversation, and deliberately tiny progress storage. Firmware owns the physical experience; the Worker owns trust boundaries and rate limits; ElevenLabs handles live ASR, agent inference, and TTS.
+Chiki separates local interaction, session authorization, cloud conversation, and deliberately tiny progress storage. Firmware owns the physical experience; the Worker owns trust boundaries and rate limits; ElevenLabs handles live ASR, agent inference, and TTS.
 
 ## Conversation path
 

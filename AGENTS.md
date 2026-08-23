@@ -1,4 +1,4 @@
-# Kidbot Working Guide
+# Chiki Working Guide
 
 ## Repository structure
 

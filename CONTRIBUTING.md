@@ -1,13 +1,13 @@
-# Contributing to Kidbot
+# Contributing to Chiki
 
-Thanks for helping make Kidbot safer, simpler, and easier to build.
+Thanks for helping make Chiki safer, simpler, and easier to build.
 
 ## Before you start
 
 - Search existing issues before opening a new one.
 - Use an issue for a large design change before writing substantial code.
 - Never include secrets, child data, transcripts, recordings, live service IDs, or local credential files.
-- Security and privacy problems belong in a [private security advisory](https://github.com/Idan707/kidbot/security/advisories/new), not a public issue.
+- Security and privacy problems belong in a [private security advisory](https://github.com/Idan707/chiki/security/advisories/new), not a public issue.
 
 ## Development setup
 

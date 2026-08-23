@@ -1,4 +1,4 @@
-// Kidbot Worker: authorize direct conversations and store normalized progress.
+// Chiki Worker: authorize direct conversations and store normalized progress.
 import { DurableObject } from 'cloudflare:workers';
 import {
   TOPIC_IDS, progressEvent, progressSnapshot, recordProgress, verifyElevenLabsSignature,

@@ -2,22 +2,22 @@
   <img src="docs/assets/kidbot-hero.png" alt="Concept artwork of a small cyan-faced voice companion in a playful retro terminal landscape" width="100%">
 </p>
 
-# Kidbot
+# Chiki
 
-[![CI](https://github.com/Idan707/kidbot/actions/workflows/ci.yml/badge.svg)](https://github.com/Idan707/kidbot/actions/workflows/ci.yml)
+[![CI](https://github.com/Idan707/chiki/actions/workflows/ci.yml/badge.svg)](https://github.com/Idan707/chiki/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-violet.svg)](https://github.com/Idan707/kidbot/releases/tag/v0.1.0)
+[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-violet.svg)](https://github.com/Idan707/chiki/releases/tag/v0.1.0)
 
 > **Ask. Wonder. Go explore.**
 
-Kidbot is an experimental, tap-to-talk Hebrew voice companion named Chiki. It runs on the Waveshare ESP32-S3-Touch-AMOLED-1.8 V2, streams audio directly to an ElevenLabs conversational agent, and turns conversations into small, safe invitations to explore the real world.
+Chiki is an experimental, tap-to-talk Hebrew voice companion. It runs on the Waveshare ESP32-S3-Touch-AMOLED-1.8 V2, streams audio directly to an ElevenLabs conversational agent, and turns conversations into small, safe invitations to explore the real world.
 
 *The banner is concept artwork, not a hardware diagram. See the [hardware guide](docs/hardware.md) for the exact board.*
 
 > [!WARNING]
-> Kidbot is an experimental source release, not a certified toy or a substitute for adult supervision. A parent or guardian must configure, supervise, and evaluate it before a child uses it.
+> Chiki is an experimental source release, not a certified toy or a substitute for adult supervision. A parent or guardian must configure, supervise, and evaluate it before a child uses it.
 
-## What Kidbot does
+## What Chiki does
 
 - Starts and ends a conversation with a short tap.
 - Shows visible listening, buffering, and playback states.
@@ -28,29 +28,35 @@ Kidbot is an experimental, tap-to-talk Hebrew voice companion named Chiki. It ru
 
 ## How it fits together
 
-```text
-             .----------.
-            /  o      o  \
-           |      /\      |
-           |    \____/    |
-            \____________/
-            CHIKI / ESP32-S3
-
- +----------------+   GET /session   +-------------------+
- | CHIKI          | ---------------->| CLOUDFLARE WORKER |
- | ESP32-S3       | <----------------| auth / cap / quest|
- +-------+--------+  URL + adventure +---------+---------+
-         |                                     |
-         | direct WebSocket                    | mint URL
-         +------------------+------------------+
-                            v
-                  +-------------------+
-                  | ELEVENLABS AGENT  |
-                  | ASR + AI + TTS    |
-                  +-------------------+
-
-             16 kHz PCM up / audio + events down
-```
+<div align="center">
+<pre align="center">
++--------------------------------------------------------------------+
+|                         CHIKI SIGNAL MAP                           |
+|                                                                    |
+|                           .----------.                             |
+|                          /  o      o  \                            |
+|                         |      /\      |                           |
+|                         |    \____/    |                           |
+|                          \____________/                            |
+|                          CHIKI / ESP32-S3                          |
+|                                                                    |
+| +--------------+  GET /session  +-------------------------+        |
+| | CHIKI        |  ------------&gt; | CLOUDFLARE WORKER       |        |
+| | ESP32-S3     |  &lt;------------ | auth / cap / adventure  |        |
+| +------+-------+   signed URL   +-------------+-----------+        |
+|        |                                      |                    |
+|        | direct WebSocket                     | mint URL           |
+|        +--------------------+-----------------+                    |
+|                             v                                      |
+|                   +--------------------+                           |
+|                   | ELEVENLABS AGENT   |                           |
+|                   | ASR + AI + TTS     |                           |
+|                   +--------------------+                           |
+|                                                                    |
+|             16 kHz PCM up / audio + events down                    |
++--------------------------------------------------------------------+
+</pre>
+</div>
 
 In words: the device authenticates to a small Cloudflare Worker, which enforces a daily cap and returns a short-lived ElevenLabs WebSocket URL plus the current adventure. Audio then travels directly between the device and ElevenLabs. After a call, a signed webhook sends only normalized progress to the Worker; the device fetches that compact map separately.
 
@@ -72,15 +78,15 @@ You need:
 - Python 3.11+, `ffmpeg`, `curl`, `jq`, and ShellCheck for all host checks;
 - Cloudflare Workers and ElevenLabs accounts.
 
-Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. Kidbot has no automatic deployment and CI never deploys production.
+Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. Chiki has no automatic deployment and CI never deploys production.
 
 ## Quick start
 
 ### 1. Clone and configure the device
 
 ```sh
-git clone https://github.com/Idan707/kidbot.git
-cd kidbot
+git clone https://github.com/Idan707/chiki.git
+cd chiki
 cp firmware/main/wifi_creds.h.example firmware/main/wifi_creds.h
 ```
 
@@ -126,7 +132,7 @@ The progress store accepts only an allowlist of topic IDs and local dates. It re
 ## Repository map
 
 ```text
-kidbot/
+chiki/
 ├── firmware/         ESP-IDF firmware for the ESP32-S3
 ├── worker/           Cloudflare Worker, tests, and agent scripts
 ├── docs/             Architecture, hardware, privacy, and artwork
@@ -155,8 +161,8 @@ Hardware acceptance remains manual because it depends on the real codec, display
 
 ## Contributing
 
-Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report vulnerabilities through the [private security advisory form](https://github.com/Idan707/kidbot/security/advisories/new).
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md), follow the [Code of Conduct](CODE_OF_CONDUCT.md), and report vulnerabilities through the [private security advisory form](https://github.com/Idan707/chiki/security/advisories/new).
 
 ## License
 
-Kidbot source and repository artwork are available under the [MIT License](LICENSE). Third-party services, hardware, SDKs, and managed components retain their own terms.
+Chiki source and repository artwork are available under the [MIT License](LICENSE). Third-party services, hardware, SDKs, and managed components retain their own terms.

@@ -6,7 +6,7 @@ Security fixes target the latest source release and the `main` branch. This expe
 
 ## Report privately
 
-Please use [GitHub private vulnerability reporting](https://github.com/Idan707/kidbot/security/advisories/new). Do not open a public issue for:
+Please use [GitHub private vulnerability reporting](https://github.com/Idan707/chiki/security/advisories/new). Do not open a public issue for:
 
 - exposed tokens, API keys, child data, transcripts, or recordings;
 - authentication, webhook-signature, or rate-limit bypasses;
