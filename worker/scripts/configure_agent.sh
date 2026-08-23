@@ -20,8 +20,10 @@ SAFETY_MODE="${2:-blocking}"
 [ -n "$KEY" ] || { echo "ELEVENLABS_API_KEY missing from .dev.vars" >&2; exit 1; }
 [ -n "$VOICE_ID" ] || { echo "ELEVEN_VOICE_ID missing from .dev.vars" >&2; exit 1; }
 [ -n "$CHILD_NAME" ] || { echo "CHILD_NAME missing from .dev.vars" >&2; exit 1; }
-[[ "$CHILD_AGE" =~ ^[0-9]+$ ]] && [ "$CHILD_AGE" -gt 0 ] ||
-  { echo "CHILD_AGE must be a positive integer" >&2; exit 1; }
+if ! [[ "$CHILD_AGE" =~ ^[0-9]+$ ]] || [ "$CHILD_AGE" -le 0 ]; then
+  echo "CHILD_AGE must be a positive integer" >&2
+  exit 1
+fi
 [[ "$WORKER_URL" == https://* ]] ||
   { echo "WORKER_URL must be an https:// origin" >&2; exit 1; }
 WORKER_URL="${WORKER_URL%/}"
