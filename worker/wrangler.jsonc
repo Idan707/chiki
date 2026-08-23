@@ -1,0 +1,14 @@
+{
+  "name": "kidbot",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-20",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "vars": {
+    "SESSION_DAILY_CAP": "20"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "COUNTER", "class_name": "SessionCounter" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SessionCounter"] }]
+}

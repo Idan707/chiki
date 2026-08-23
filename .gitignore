@@ -1,0 +1,14 @@
+.dev.vars*
+.env*
+!.dev.vars.example
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
+.wrangler/
+firmware/build/
+firmware/main/wifi_creds.h
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old

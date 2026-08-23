@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    name: Worker and scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: worker/requirements-dev.txt
+      - name: Install
+        working-directory: worker
+        run: |
+          npm ci
+          python -m pip install -r requirements-dev.txt
+      - name: Test and dry-run
+        working-directory: worker
+        run: |
+          npm test
+          npm run check
+          python -m compileall -q scripts
+          find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
+          find scripts -name '*.sh' -print0 | xargs -0 shellcheck
+
+  firmware:
+    name: ESP-IDF 5.5.4
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and verify lock
+        uses: espressif/esp-idf-ci-action@e6f5c74232b1ccd4c97ed641f1e48553853f1fd5 # v1.2.0
+        with:
+          path: firmware
+          target: esp32s3
+          esp_idf_version: v5.5.4
+          command: cp main/wifi_creds.h.example main/wifi_creds.h && idf.py build && git diff --exit-code -- dependencies.lock

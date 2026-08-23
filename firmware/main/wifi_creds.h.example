@@ -1,0 +1,6 @@
+// copy to wifi_creds.h (gitignored) and fill in
+#pragma once
+#define WIFI_SSID    "your-ssid"
+#define WIFI_PASS    "your-password"
+#define WORKER_URL   "https://kidbot.YOUR-SUBDOMAIN.workers.dev"
+#define DEVICE_TOKEN "same-value-as-worker-DEVICE_TOKEN-secret"

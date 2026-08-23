@@ -1,0 +1,12 @@
+# Copy to .dev.vars (gitignored) and fill in.
+ELEVENLABS_API_KEY=
+ELEVEN_AGENT_ID=
+ELEVEN_VOICE_ID=
+DEVICE_TOKEN=
+WORKER_URL=https://your-worker.example.workers.dev
+CHILD_NAME=
+CHILD_AGE=
+# masculine or feminine
+CHILD_GRAMMATICAL_FORM=
+# Added automatically by configure_progress_webhook.sh.
+ELEVEN_WEBHOOK_SECRET=

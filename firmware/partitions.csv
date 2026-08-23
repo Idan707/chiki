@@ -1,0 +1,10 @@
+# Mirrors the layout already flashed on the device — app is flashed into the existing table at 0x110000
+# Name,      Type, SubType,  Offset,   Size, Flags
+nvsfactory,  data, nvs,      0x9000,   0x32000,
+nvs,         data, nvs,      0x3B000,  0xD2000,
+otadata,     data, ota,      0x10D000, 0x2000,
+phy_init,    data, phy,      0x10F000, 0x1000,
+factory,     app,  factory,  0x110000, 0x580000,
+ota_0,       app,  ota_0,    0x690000, 0x300000,
+assets,      data, spiffs,   0x990000, 0x300000,
+storage,     data, spiffs,   0xC90000, 0x370000,
