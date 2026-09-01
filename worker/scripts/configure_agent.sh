@@ -55,7 +55,10 @@ $GRAMMAR_RULE
 # ההרפתקה הנוכחית
 - נושא השבוע הוא {{weekly_theme}}.
 - הרעיון הקטן להיום הוא: {{today_mission}}
+- הנושא האחרון שחקרתם יחד הוא {{last_topic}}. אם זה ריק, אין נושא קודם.
 - אלה הזמנה וסיפור רקע, לא שיעורי בית. אם $CHILD_NAME רוצה משהו אחר, זרום ואל תחזיר בכוח למשימה.
+- משפט הפתיחה שלך כבר נאמר. אל תחזור עליו ואל תציג מחדש את נושא השבוע.
+- אם $CHILD_NAME בחר להמשיך נושא קודם, המשך משם ואל תציע שוב את המשימה.
 
 # איך לדבר
 - עברית פשוטה וברורה שמתאימה לגיל $CHILD_AGE.
@@ -76,12 +79,15 @@ $GRAMMAR_RULE
 
 # כנות וזיכרון
 - אל תמציא זיכרונות, תגליות קודמות, אוספים או אירועים שלא נמסרו לך במפורש.
+- אתה יודע רק את שם הנושא הקודם ({{last_topic}}), לא מה נאמר בו. אם $CHILD_NAME מבקש להמשיך, בקש ממנו להזכיר לך איפה עצרתם.
 - כשאינך יודע, הפוך את זה לסקרנות משותפת או הצע לשאול הורה. אינך חייב להישמע כל־יודע.
 EOF
 )
 
-FIRST_MESSAGE='{{return_line}} נושא ההרפתקה שלנו השבוע הוא {{weekly_theme}}. יש לי רעיון קטן: {{today_mission}} בא לך לנסות, או לספר לי מה מסקרן אותך היום?'
-RETURN_LINE="היי $CHILD_NAME! איזה כיף לשמוע אותך שוב."
+# The Worker composes the whole opener: it alone knows how long ago the last session
+# was, so it can shorten the greeting after an accidental re-tap. ElevenLabs
+# placeholders cannot express that conditional.
+FIRST_MESSAGE='{{opening_line}}'
 
 if [ "$SAFETY_MODE" != off ]; then
   BASE_PROMPT="$BASE_PROMPT$(cat <<'EOF'
@@ -108,7 +114,7 @@ if [ "$SAFETY_MODE" = blocking ]; then ENABLE_CONTENT=true; else ENABLE_CONTENT=
 
 BODY=$(jq -n \
   --arg prompt "$BASE_PROMPT" --arg first_message "$FIRST_MESSAGE" \
-  --arg return_line "$RETURN_LINE" --arg voice_id "$VOICE_ID" \
+  --arg voice_id "$VOICE_ID" \
   --arg webhook_id "$WEBHOOK_ID" \
   --argjson record "$RECORD" --argjson retention "$RETENTION" \
   --argjson delete "$DELETE" --argjson safety "$ENABLE_SAFETY" \
@@ -138,7 +144,8 @@ BODY=$(jq -n \
           weekly_theme:"החלל",
           weekly_theme_id:"space",
           today_mission:"מצא שלושה דברים עגולים שנראים כמו כוכבי לכת.",
-          return_line:$return_line,
+          last_topic:"",
+          opening_line:"היי! אני צ׳יקי, חבר ההרפתקאות שלך. נושא ההרפתקה שלנו השבוע הוא החלל. יש לי רעיון קטן: מצא שלושה דברים עגולים שנראים כמו כוכבי לכת. בא לך לנסות, או לספר לי מה מסקרן אותך היום?",
           progress_enabled:false
         }}
       }
@@ -202,7 +209,7 @@ LIVE=$(curl -fsSL -H "xi-api-key: $KEY" "https://api.elevenlabs.io/v1/convai/age
 printf '%s' "$LIVE" | jq -e \
   --arg id "$AGENT_ID" --arg privacy "$PRIVACY_MODE" --arg safety "$SAFETY_MODE" \
   --arg prompt "$BASE_PROMPT" --arg first_message "$FIRST_MESSAGE" \
-  --arg return_line "$RETURN_LINE" --arg voice_id "$VOICE_ID" --arg webhook_id "$WEBHOOK_ID" '
+  --arg voice_id "$VOICE_ID" --arg webhook_id "$WEBHOOK_ID" '
   .agent_id == $id and
   .conversation_config.agent.prompt.prompt == $prompt and
   .conversation_config.agent.first_message == $first_message and
@@ -210,7 +217,8 @@ printf '%s' "$LIVE" | jq -e \
     weekly_theme:"החלל",
     weekly_theme_id:"space",
     today_mission:"מצא שלושה דברים עגולים שנראים כמו כוכבי לכת.",
-    return_line:$return_line,
+    last_topic:"",
+    opening_line:"היי! אני צ׳יקי, חבר ההרפתקאות שלך. נושא ההרפתקה שלנו השבוע הוא החלל. יש לי רעיון קטן: מצא שלושה דברים עגולים שנראים כמו כוכבי לכת. בא לך לנסות, או לספר לי מה מסקרן אותך היום?",
     progress_enabled:false
   } and
   .conversation_config.asr.user_input_audio_format == "pcm_16000" and
