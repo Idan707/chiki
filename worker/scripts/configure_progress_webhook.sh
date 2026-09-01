@@ -27,8 +27,6 @@ if [ -z "$ID" ]; then
   }
   ID=$(printf '%s' "$CREATED" | jq -er '.webhook_id')
   SECRET=$(printf '%s' "$CREATED" | jq -er '.webhook_secret')
-  printf '%s' "$SECRET" | npx --no-install wrangler secret put ELEVEN_WEBHOOK_SECRET >/dev/null
-
   TMP=$(mktemp .dev.vars.XXXXXX)
   trap 'if [ -n "${TMP:-}" ]; then rm -f "$TMP"; fi' EXIT
   FOUND=false
@@ -44,13 +42,20 @@ if [ -z "$ID" ]; then
   chmod 600 "$TMP"
   mv "$TMP" .dev.vars
   TMP=
+  # Only now push to Cloudflare: .dev.vars already holds the one-time secret, so a
+  # failure here is recoverable by re-running instead of losing the webhook.
+  printf '%s' "$SECRET" | npx --no-install wrangler secret put ELEVEN_WEBHOOK_SECRET >/dev/null
   unset SECRET
   echo "created webhook and stored its HMAC secret in Cloudflare and .dev.vars"
 fi
 
+# Post-call transcript delivery is bound on the agent, not here: configure_agent.sh
+# sets platform_settings.workspace_overrides.webhooks.post_call_webhook_id with
+# events ["transcript"]. This endpoint's own `events` field uses an unrelated
+# taxonomy and rejects "post_call_transcription" with HTTP 422.
 curl -fsSL -X PATCH "$BASE/$ID" -H "xi-api-key: $KEY" -H 'Content-Type: application/json' \
   --data "$(jq -n --arg name "$NAME" \
-    '{is_disabled:false,name:$name,retry_enabled:true,events:["post_call_transcription"]}')" >/dev/null
+    '{is_disabled:false,name:$name,retry_enabled:true}')" >/dev/null
 
 LIVE=$(curl -fsSL -H "xi-api-key: $KEY" "$BASE?include_usages=true")
 printf '%s' "$LIVE" | jq -e --arg id "$ID" \
