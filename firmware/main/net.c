@@ -4,12 +4,14 @@
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 
 static const char *TAG = "net";
+#define BODY_SZ 2048
 static EventGroupHandle_t s_eg;
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -61,7 +63,18 @@ esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
     esp_http_client_set_header(client, "Authorization", "Bearer " DEVICE_TOKEN);
 
     esp_err_t err = ESP_FAIL;
-    char body[1024];
+    // PSRAM, not .bss or stack: internal RAM is scarce here - the LCD needs a
+    // big contiguous DMA block per redraw and the TLS handshake below already
+    // crowds it. Only the pipeline task ever calls this.
+    static char *body;
+    size_t used = 0;
+    if (!body) {
+        body = heap_caps_malloc(BODY_SZ, MALLOC_CAP_SPIRAM);
+        if (!body) {
+            ESP_LOGE(TAG, "session body buffer alloc failed");
+            goto out;
+        }
+    }
     if (esp_http_client_open(client, 0) != ESP_OK) {
         goto out;
     }
@@ -70,11 +83,22 @@ esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
         ESP_LOGE(TAG, "session http %d", esp_http_client_get_status_code(client));
         goto out;
     }
-    int n = esp_http_client_read(client, body, sizeof(body) - 1);
-    if (n <= 0) {
+    // one read can stop at a TCP segment boundary and truncate the JSON
+    while (used < BODY_SZ - 1) {
+        int n = esp_http_client_read(client, body + used, BODY_SZ - 1 - used);
+        if (n < 0) {
+            goto out;
+        }
+        if (n == 0) {
+            break;
+        }
+        used += n;
+    }
+    if (used == 0 || used >= BODY_SZ - 1) {
+        ESP_LOGE(TAG, "session response empty or too large (%u bytes)", (unsigned)used);
         goto out;
     }
-    body[n] = 0;
+    body[used] = 0;
 
     cJSON *root = cJSON_Parse(body);
     const cJSON *su = cJSON_GetObjectItem(root, "signed_url");
@@ -85,8 +109,13 @@ esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
     dyn[0] = 0;
     char *dv = cJSON_PrintUnformatted(cJSON_GetObjectItem(root, "dynamic_variables"));
     if (dv) {
+        // dropping these silently makes the agent fall back to its placeholder
+        // greeting, so the child hears last week's theme - say so loudly
         if (strlen(dv) < dyn_cap) {
             strcpy(dyn, dv);
+        } else {
+            ESP_LOGE(TAG, "dynamic_variables dropped: %u bytes needs %u",
+                     (unsigned)strlen(dv), (unsigned)dyn_cap);
         }
         cJSON_free(dv);
     }

@@ -3,6 +3,7 @@ import test from 'node:test';
 import {
   ADVENTURES, RESUME_MS, RETURN_SOON_MS, adventureFor, sessionTier, themeName,
 } from '../src/adventure.mjs';
+import { TOPIC_IDS } from '../src/progress.mjs';
 
 const NOW = Date.UTC(2026, 8, 2, 12, 0, 0);
 const ALL_MISSIONS = new Set(ADVENTURES.flatMap(([, missions]) => missions));
@@ -57,4 +58,40 @@ test('a first-ever session introduces Chiki with the weekly theme', () => {
   assert.ok(first.opening_line.includes('אני צ׳יקי'));
   assert.ok(first.opening_line.includes(first.weekly_theme));
   assert.ok(first.opening_line.includes(first.today_mission));
+});
+
+// The device copies this JSON into a fixed buffer (pipeline.c: static char
+// dyn[1024]) and silently drops it if it does not fit, which makes the agent
+// fall back to its placeholder greeting and speak the wrong weekly theme.
+test('dynamic_variables always fit the firmware buffer', () => {
+  const FIRMWARE_DYN_CAP = 1024;
+  const DAY = 86_400_000;
+  const topics = ['', 'other', ...ADVENTURES.map((_, i) => TOPIC_IDS[i])];
+  let worst = 0;
+  let worstVars = '';
+
+  for (let week = 0; week < ADVENTURES.length; week++) {
+    for (let day = 0; day < 7; day++) {
+      const now = NOW + (week * 7 + day) * DAY;
+      const seens = [0, now - 1_000, now - RESUME_MS, now - RETURN_SOON_MS];
+      for (const previousSeen of seens) {
+        for (let ordinal = 0; ordinal < 8; ordinal++) {
+          for (const topicId of topics) {
+            const vars = {
+              ...adventureFor(now, previousSeen, ordinal, topicId),
+              progress_enabled: true,
+            };
+            const json = JSON.stringify(vars);
+            const size = Buffer.byteLength(json, 'utf8');
+            if (size > worst) { worst = size; worstVars = json; }
+          }
+        }
+      }
+    }
+  }
+
+  assert.ok(
+    worst < FIRMWARE_DYN_CAP,
+    `widest dynamic_variables is ${worst} bytes, firmware dyn[] holds ${FIRMWARE_DYN_CAP}: ${worstVars}`,
+  );
 });

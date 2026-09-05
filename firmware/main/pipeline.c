@@ -16,6 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/idf_additions.h"
+#include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "mbedtls/base64.h"
@@ -33,12 +34,22 @@ static const char *TAG = "pipeline";
 #define PLAY_BUF    (2 * 1024 * 1024)         // ~65s of agent audio
 #define TX_BUF      (256 * 1024)               // 8s upload cushion; network must never stall speaker
 #define PREBUFFER   48000                     // 1.5s: TTS arrives in bursts; less = mid-sentence stutter
+// Session scratch. These live in PSRAM, not .bss: the LCD needs a large
+// contiguous internal DMA buffer per redraw, and TLS handshakes already crowd
+// internal RAM enough to make it fail.
+#define DYN_SZ      1024                      // widest weekly adventure is ~585 bytes
+#define HELLO_SZ    1280                      // must stay ahead of DYN_SZ plus framing
 
 static EventGroupHandle_t s_eg;
 static esp_websocket_client_handle_t s_ws;
+// tx_task can still be blocked inside a 2s send when session() gives up waiting
+// for it, and destroying the client under it panics with LoadProhibited. Every
+// use of s_ws goes through this lock, and teardown nulls it while holding it.
+static SemaphoreHandle_t s_ws_lock;
 static StreamBufferHandle_t s_play, s_tx;
 static uint8_t *s_acc, *s_dec, *s_tx_pcm;
 static char *s_mic_json;
+static char *s_dyn, *s_hello;
 static size_t s_acc_len;
 static bool s_acc_drop;
 static volatile bool s_ws_up;
@@ -179,7 +190,11 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 static bool ws_send(const char *data, int len, const char *what)
 {
     for (int attempt = 0; attempt < 2; attempt++) {
-        int sent = esp_websocket_client_send_text(s_ws, data, len, pdMS_TO_TICKS(2000));
+        xSemaphoreTake(s_ws_lock, portMAX_DELAY);
+        int sent = s_ws
+            ? esp_websocket_client_send_text(s_ws, data, len, pdMS_TO_TICKS(2000))
+            : -1;                           // torn down under us; fail, don't crash
+        xSemaphoreGive(s_ws_lock);
         if (sent == len) {
             return true;
         }
@@ -259,8 +274,8 @@ static void session(void)
     bool tx_started = false;
     face_set_state(FACE_THINKING);
     static char url[768];
-    static char dyn[512];
-    if (net_get_signed_url(url, sizeof(url), dyn, sizeof(dyn)) != ESP_OK) {
+    char *dyn = s_dyn;
+    if (net_get_signed_url(url, sizeof(url), dyn, DYN_SZ) != ESP_OK) {
         goto fail;
     }
 
@@ -299,12 +314,18 @@ static void session(void)
     }
     // server won't speak the greeting until the client announces itself;
     // dynamic_variables = worker-picked weekly adventure for the first message
-    static char hello[640];
+    char *hello = s_hello;
     int hn = dyn[0]
-        ? snprintf(hello, sizeof(hello), "{\"type\":\"conversation_initiation_"
+        ? snprintf(hello, HELLO_SZ, "{\"type\":\"conversation_initiation_"
                    "client_data\",\"dynamic_variables\":%s}", dyn)
-        : snprintf(hello, sizeof(hello),
+        : snprintf(hello, HELLO_SZ,
                    "{\"type\":\"conversation_initiation_client_data\"}");
+    // snprintf returns what it *would* have written: sending that length raw
+    // would read past the buffer and ship the overrun to the agent
+    if (hn < 0 || hn >= HELLO_SZ) {
+        ESP_LOGE(TAG, "initiation frame truncated: %d needs %d", hn, HELLO_SZ);
+        goto close_audio;
+    }
     if (!ws_send(hello, hn, "conversation initiation")) {
         goto close_audio;
     }
@@ -393,15 +414,19 @@ static void session(void)
 close_audio:
     if (tx_started) {
         s_tx_stop = true;
-        for (int i = 0; i < 50 && !s_tx_done; i++) {
+        // one ws_send is up to 2s x 2 attempts, so 5s was a coin flip; 15s is
+        // clear of it. Overrunning is no longer fatal - the lock below makes
+        // teardown safe either way - but a second tx_task would share s_tx.
+        for (int i = 0; i < 150 && !s_tx_done; i++) {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
         if (!s_tx_done) {
-            ESP_LOGE(TAG, "audio sender task did not stop");
+            ESP_LOGW(TAG, "audio sender task still running; teardown is locked");
         }
     }
     audio_close();
 fail_ws:
+    xSemaphoreTake(s_ws_lock, portMAX_DELAY);
     if (s_ws) {
         if (s_end_req && esp_websocket_client_is_connected(s_ws)) {
             err = esp_websocket_client_close_with_code(
@@ -413,8 +438,9 @@ fail_ws:
             ESP_LOGW(TAG, "ws close failed: %s", esp_err_to_name(err));
         }
         esp_websocket_client_destroy(s_ws);
-        s_ws = NULL;
+        s_ws = NULL;                        // ws_send now fails instead of faulting
     }
+    xSemaphoreGive(s_ws_lock);
     s_ws_up = false;
 fail:
     if (!s_end_req) {  // tap-to-end is a clean exit; anything else shows sad
@@ -443,13 +469,43 @@ static void task(void *arg)
 
 void pipeline_start(void)
 {
+    // These six buffers are ~4.9 MB of PSRAM and run after the display is
+    // already up, so a failure here aborts into a reboot loop that looks like a
+    // dead screen. Log the budget either way: a blank display is a panic until
+    // the monitor says otherwise.
+    ESP_LOGI(TAG, "psram before: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
     s_eg = xEventGroupCreate();
+    s_ws_lock = xSemaphoreCreateMutex();
     s_acc = heap_caps_malloc(ACC_CAP, MALLOC_CAP_SPIRAM);
     s_dec = heap_caps_malloc(DEC_CAP, MALLOC_CAP_SPIRAM);
     s_tx_pcm = heap_caps_malloc(MIC_CHUNK, MALLOC_CAP_SPIRAM);
     s_mic_json = heap_caps_malloc(MIC_JSON_SZ, MALLOC_CAP_SPIRAM);
+    s_dyn = heap_caps_malloc(DYN_SZ, MALLOC_CAP_SPIRAM);
+    s_hello = heap_caps_malloc(HELLO_SZ, MALLOC_CAP_SPIRAM);
     s_play = xStreamBufferCreateWithCaps(PLAY_BUF, 4096, MALLOC_CAP_SPIRAM);  // chunky reads, no dribble
     s_tx = xStreamBufferCreateWithCaps(TX_BUF, 1, MALLOC_CAP_SPIRAM);
-    assert(s_acc && s_dec && s_tx_pcm && s_mic_json && s_play && s_tx);
+
+    if (!s_acc || !s_dec || !s_tx_pcm || !s_mic_json || !s_play || !s_tx ||
+        !s_ws_lock || !s_dyn || !s_hello) {
+        ESP_LOGE(TAG, "psram exhausted: wanted %u bytes, free=%u largest=%u "
+                 "(acc=%d dec=%d tx_pcm=%d mic_json=%d play=%d tx=%d)",
+                 (unsigned)(ACC_CAP + DEC_CAP + MIC_CHUNK + MIC_JSON_SZ + PLAY_BUF + TX_BUF),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                 !!s_acc, !!s_dec, !!s_tx_pcm, !!s_mic_json, !!s_play, !!s_tx);
+    }
+    assert(s_acc && s_dec && s_tx_pcm && s_mic_json && s_play && s_tx &&
+           s_ws_lock && s_dyn && s_hello);
+
+    ESP_LOGI(TAG, "psram after: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    // the LCD needs one big contiguous block of this per redraw; TLS eats it
+    ESP_LOGI(TAG, "internal dma: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
     xTaskCreate(task, "pipeline", 12288, NULL, 5, NULL);
 }

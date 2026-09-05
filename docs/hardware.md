@@ -63,3 +63,6 @@ During buffering and playback, firmware sends zero PCM for the same elapsed dura
 | Choppy first words | Re-test the physical speaker path before changing `PREBUFFER`. |
 | Conversation never returns idle | Confirm `agent_response_complete` is enabled and that the playback queue drains. |
 | Wrong display/touch behavior | Confirm the board is V2; V1 is not supported yet. |
+| Display blank and stays blank across reboots and reflashes | Unplug USB fully for ten seconds, then replug. The AMOLED has no reset line (`BSP_LCD_RST` is `GPIO_NUM_NC`), so a panel left wedged mid-transfer survives every software reset; only a power cycle clears it. |
+| Display stops drawing partway through a session | Look for `setup_dma_priv_buffer` failures on the monitor. The draw buffer lives in PSRAM, so every redraw needs a large contiguous internal DMA block and TLS handshakes compete for it. Keep new buffers out of internal RAM; `pipeline_start` logs the budget at boot. |
+| Blank screen right after a firmware change | Treat it as a panic until the monitor says otherwise. Attach `idf.py monitor` and look for a backtrace before re-flashing. |
