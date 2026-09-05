@@ -3,7 +3,7 @@ import { webcrypto } from 'node:crypto';
 import test from 'node:test';
 import {
   hasSubstantiveExchange, jerusalemDay, normalizeTopics, progressSnapshot, recordProgress,
-  progressEvent, verifyElevenLabsSignature,
+  progressEvent, pruneProgress, verifyElevenLabsSignature,
 } from '../src/progress.mjs';
 
 globalThis.crypto ||= webcrypto;
@@ -43,11 +43,26 @@ test('accepts only enabled, completed Chiki transcription fixtures', () => {
       conversation_initiation_client_data: { dynamic_variables: { progress_enabled: true } },
     },
   };
-  assert.deepEqual(progressEvent(event, 'kidbot')?.topics, ['space']);
+  assert.deepEqual(progressEvent(event, 'kidbot', 1_800_000_000_000)?.topics, ['space']);
+  assert.equal(progressEvent(event, undefined, 1_800_000_000_000), null);
+  assert.equal(progressEvent(event, 'kidbot', 1_800_000_000_000 + 3 * 86_400_000), null);
+  assert.equal(progressEvent(event, 'kidbot', 1_800_000_000_000 - 600_000), null);
   assert.equal(progressEvent(event, 'another-agent'), null);
   assert.equal(progressEvent({ ...event, type: 'post_call_audio' }, 'kidbot'), null);
   event.data.conversation_initiation_client_data.dynamic_variables.progress_enabled = false;
   assert.equal(progressEvent(event, 'kidbot'), null);
+});
+
+test('expiry prunes old day-level history and identifiers but preserves lifetime totals', () => {
+  const at = Date.parse('2026-08-23T12:00:00Z');
+  const result = recordProgress(null, '__proto__', at, ['space']);
+  assert.ok(Object.hasOwn(result.state.seen, '__proto__'));
+  assert.equal(recordProgress(result.state, '__proto__', at, ['weather']).duplicate, true);
+  const state = pruneProgress(result.state, at + 100 * 86_400_000);
+  assert.deepEqual(state.days, {});
+  assert.deepEqual(state.seen, {});
+  assert.equal(state.lifetime_explorations, 1);
+  assert.equal(state.latest_topic, 'space');
 });
 
 test('deduplicates conversations and topic-days while keeping lifetime progress', () => {
@@ -60,6 +75,9 @@ test('deduplicates conversations and topic-days while keeping lifetime progress'
   result = recordProgress(result.state, 'conv-2', at, ['space', 'weather']);
   assert.equal(result.state.lifetime_explorations, 2);
   assert.deepEqual(result.state.lifetime_topics.sort(), ['space', 'weather']);
+  result = recordProgress(result.state, 'conv-3', at, ['space']);
+  assert.equal(result.state.latest_topic, 'space');
+  assert.equal(result.state.lifetime_explorations, 2);
 });
 
 test('builds a Sunday-aligned 84-cell calendar capped at intensity four', () => {

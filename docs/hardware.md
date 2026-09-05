@@ -2,7 +2,7 @@
 
 ## Supported board
 
-Chiki v0.1.0 is verified on the **Waveshare ESP32-S3-Touch-AMOLED-1.8 V2**. It uses the board's AMOLED display and touch controller plus its onboard microphone, speaker, and ES8311 audio codec.
+Chiki targets the **Waveshare ESP32-S3-Touch-AMOLED-1.8 V2**, the revision used for development. It uses the board's AMOLED display and touch controller plus its onboard microphone, speaker, and ES8311 audio codec. CI checks compilation; it cannot certify each revision's physical behavior. Run the [hardware acceptance checks](../CONTRIBUTING.md#pull-requests) before supervised use.
 
 Waveshare documents different display and touch controllers for V1 and V2. V1 is therefore **unverified**, not assumed compatible. Check the revision printed on the board and compare it with the [official Waveshare documentation](https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8).
 
@@ -29,9 +29,11 @@ Use a pinned ESP-IDF installation rather than whichever version happens to be on
 ```sh
 . /path/to/esp-idf-v5.5.4/export.sh
 idf.py -C firmware build
-idf.py -C firmware -p /dev/your-serial-port app-flash
+idf.py -C firmware -p /dev/your-serial-port flash
 idf.py -C firmware -p /dev/your-serial-port monitor
 ```
+
+Use `flash` for the first installation: it writes the bootloader, partition table, and application. Use `app-flash` only for application updates after that setup is in place.
 
 On macOS the port commonly resembles `/dev/cu.usbmodem*`; on Linux it commonly resembles `/dev/ttyACM*`. Find the actual device on your machine instead of copying an example path blindly.
 
@@ -61,5 +63,5 @@ During buffering and playback, firmware sends zero PCM for the same elapsed dura
 | HTTP 401 | The compiled token and Worker `DEVICE_TOKEN` differ, or the Worker secret is absent. |
 | HTTP 429 | The validated daily session cap is exhausted. Wait for the UTC counter day or adjust the positive cap deliberately. |
 | Choppy first words | Re-test the physical speaker path before changing `PREBUFFER`. |
-| Conversation never returns idle | Confirm `agent_response_complete` is enabled and that the playback queue drains. |
+| Session ends unexpectedly | Confirm `agent_response_complete` is enabled. A ten-second audio stall without that event ends the session instead of pretending playback completed. |
 | Wrong display/touch behavior | Confirm the board is V2; V1 is not supported yet. |

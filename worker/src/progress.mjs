@@ -30,9 +30,9 @@ export function hasSubstantiveExchange(transcript) {
   return false;
 }
 
-export function progressEvent(event, agentId) {
+export function progressEvent(event, agentId, nowMs = Date.now()) {
   const data = event?.data;
-  if (event?.type !== 'post_call_transcription' || data?.agent_id !== agentId ||
+  if (!agentId || event?.type !== 'post_call_transcription' || data?.agent_id !== agentId ||
       data?.status !== 'done' || typeof data?.conversation_id !== 'string' ||
       !data.conversation_id || data.conversation_id.length > 128) return null;
   const dynamic = data.conversation_initiation_client_data?.dynamic_variables || {};
@@ -40,7 +40,8 @@ export function progressEvent(event, agentId) {
   if (!hasSubstantiveExchange(data.transcript)) return null;
   const topics = normalizeTopics(data.analysis?.data_collection_results?.explored_topics);
   const timestampMs = Number(data.metadata?.start_time_unix_secs || event.event_timestamp) * 1000;
-  return topics.length && Number.isFinite(timestampMs)
+  return topics.length && Number.isSafeInteger(timestampMs) &&
+    timestampMs > 0 && timestampMs >= nowMs - SEEN_MS && timestampMs <= nowMs + 300_000
     ? { conversationId: data.conversation_id, timestampMs, topics }
     : null;
 }
@@ -61,20 +62,34 @@ function dayKey(number) {
   return new Date(number * DAY_MS).toISOString().slice(0, 10);
 }
 
-export function recordProgress(previous, conversationId, timestampMs, topics) {
+export function pruneProgress(previous, nowMs) {
   const state = previous && typeof previous === 'object' ? structuredClone(previous) : {};
+  state.days ||= {};
+  state.seen ||= {};
+  const today = jerusalemDay(nowMs);
+  const weekday = new Date(`${today}T00:00:00Z`).getUTCDay();
+  const oldestDay = dayKey(dayNumber(today) - weekday - 11 * 7);
+  for (const day of Object.keys(state.days)) {
+    if (day < oldestDay) delete state.days[day];
+  }
+  for (const [id, seenAt] of Object.entries(state.seen)) {
+    if (seenAt < nowMs - SEEN_MS) delete state.seen[id];
+  }
+  return state;
+}
+
+export function recordProgress(previous, conversationId, timestampMs, topics, nowMs = timestampMs) {
+  const state = pruneProgress(previous, nowMs);
   state.revision ||= 0;
   state.days ||= {};
   state.lifetime_topics ||= [];
   state.lifetime_explorations ||= 0;
   state.seen ||= {};
 
-  const oldestSeen = timestampMs - SEEN_MS;
-  for (const [id, seenAt] of Object.entries(state.seen)) {
-    if (seenAt < oldestSeen) delete state.seen[id];
-  }
-  if (!conversationId || state.seen[conversationId]) return { state, changed: false, duplicate: true };
-  state.seen[conversationId] = timestampMs;
+  if (!conversationId || Object.hasOwn(state.seen, conversationId)) return { state, changed: false, duplicate: true };
+  Object.defineProperty(state.seen, conversationId, {
+    value: nowMs, enumerable: true, writable: true, configurable: true,
+  });
 
   const valid = [...new Set(topics)].filter((topic) => TOPIC_SET.has(topic)).slice(0, 3);
   if (!valid.length) return { state, changed: false, duplicate: false };
@@ -88,11 +103,13 @@ export function recordProgress(previous, conversationId, timestampMs, topics) {
     state.lifetime_explorations++;
     changed = true;
   }
+  const latest = valid[valid.length - 1];
+  if (state.latest_topic !== latest) changed = true;
   if (!changed) return { state, changed: false, duplicate: false };
 
   state.days[key] = [...existing];
   state.lifetime_topics = [...new Set([...state.lifetime_topics, ...valid])].filter((topic) => TOPIC_SET.has(topic));
-  state.latest_topic = valid[valid.length - 1];
+  state.latest_topic = latest;
   state.revision++;
   return { state, changed: true, duplicate: false };
 }

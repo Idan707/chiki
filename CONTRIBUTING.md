@@ -22,8 +22,10 @@ python -m pip install -r requirements-dev.txt
 npm test
 npm run check
 python -m py_compile scripts/*.py
-bash -n scripts/*.sh
+for script in scripts/*.sh; do bash -n "$script"; done
 shellcheck scripts/*.sh
+python test/scripts_test.py
+cd ..
 ```
 
 Firmware requires ESP-IDF 5.5.4:
@@ -31,11 +33,12 @@ Firmware requires ESP-IDF 5.5.4:
 ```sh
 . /path/to/esp-idf-v5.5.4/export.sh
 cp firmware/main/wifi_creds.h.example firmware/main/wifi_creds.h
+python3 firmware/test/run_net_test.py
 idf.py -C firmware build
 git diff --exit-code -- firmware/dependencies.lock
 ```
 
-Use placeholders in the local credentials file for a compile-only check.
+Use placeholders in the local credentials file for a compile-only check. Do not overwrite an existing private credentials file. The host network test uses IDF's cJSON and stubbed ESP transport, with no real credentials or network access.
 
 ## Pull requests
 

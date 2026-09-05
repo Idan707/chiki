@@ -19,7 +19,7 @@
 ```sh
 . /path/to/esp-idf-v5.5.4/export.sh
 idf.py -C firmware build
-idf.py -C firmware -p /dev/your-serial-port app-flash
+idf.py -C firmware -p /dev/your-serial-port flash
 idf.py -C firmware -p /dev/your-serial-port monitor
 
 cd worker
@@ -27,8 +27,9 @@ npm ci
 npm test
 npm run check
 python3 -m py_compile scripts/*.py
-bash -n scripts/*.sh
+for script in scripts/*.sh; do bash -n "$script"; done
 shellcheck scripts/*.sh
+python3 test/scripts_test.py
 ./scripts/configure_agent.sh
 ./scripts/configure_progress_webhook.sh
 python3 scripts/convai_test.py /path/to/question.wav --no-play
@@ -49,6 +50,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 - PCM is always 16 kHz, signed 16-bit, mono in both directions.
 - Keep half duplex: upload microphone PCM only while listening; upload equal-duration zero PCM while buffering, playing, and flushing microphone input.
 - Playback ends only after `agent_response_complete` and an empty playback queue. Packet gaps are not response boundaries.
+- A ten-second audio stall without completion ends the session; it must never reopen microphone upload by pretending the response completed.
 - Keep `PREBUFFER` in `firmware/main/pipeline.c` as a hardware calibration knob. The current `48,000` bytes is the measured 1.5-second setting.
 - Keep automatic WebSocket reconnect disabled because a signed raw conversation cannot be resumed safely.
 
@@ -71,6 +73,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 
 - Run the smallest relevant tests, then all Worker checks for Worker changes and a clean ESP-IDF build for firmware changes.
 - After a firmware build, require `git diff --exit-code -- firmware/dependencies.lock`.
+- With ESP-IDF exported, run `python3 firmware/test/run_net_test.py` from the repository root for HTTP parsing changes.
 - For user-visible firmware changes, verify the real V2 device: tap, states, authenticated session, 16 kHz PCM, complete playback, `agent_response_complete`, and close code `1000`.
 - Run the host conversation test only with a maintainer-supplied WAV and `progress=0`; run all four safety cases after agent changes.
 - Before publication, scan staged files for secrets, personal identifiers, live URLs, absolute paths, audio, generated folders, and caches.

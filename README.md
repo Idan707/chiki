@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/Idan707/chiki/actions/workflows/ci.yml/badge.svg)](https://github.com/Idan707/chiki/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-cyan.svg)](LICENSE)
-[![Release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-violet.svg)](https://github.com/Idan707/chiki/releases/tag/v0.1.0)
+[![Status: experimental](https://img.shields.io/badge/status-experimental-violet.svg)](docs/safety-and-privacy.md)
 
 > **Ask. Wonder. Go explore.**
 
@@ -58,7 +58,7 @@ Chiki is an experimental, tap-to-talk Hebrew voice companion. It runs on the Wav
 </pre>
 </div>
 
-In words: the device authenticates to a small Cloudflare Worker, which enforces a daily cap and returns a short-lived ElevenLabs WebSocket URL plus the current adventure. Audio then travels directly between the device and ElevenLabs. After a call, a signed webhook sends only normalized progress to the Worker; the device fetches that compact map separately.
+In words: the device authenticates to a small Cloudflare Worker, which caps signed-URL requests and returns a short-lived ElevenLabs WebSocket URL plus the current adventure. Audio then travels directly between the device and ElevenLabs. After a call, a signed webhook sends the transcript and analysis to the Worker. The Worker processes them in memory and stores only normalized progress; the device fetches that compact map separately.
 
 Read the full [architecture](docs/architecture.md), [hardware](docs/hardware.md), and [safety and privacy](docs/safety-and-privacy.md) guides.
 
@@ -78,7 +78,7 @@ You need:
 - Python 3.11+, `ffmpeg`, `curl`, `jq`, and ShellCheck for all host checks;
 - Cloudflare Workers and ElevenLabs accounts.
 
-Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. Chiki has no automatic deployment and CI never deploys production.
+Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. The daily cap limits URL issuance, not total billed minutes: [signed URLs can be reused until they expire](https://elevenlabs.io/docs/eleven-agents/customization/authentication). Set provider-side spending and concurrency limits too. Chiki has no automatic deployment and CI never deploys production.
 
 ## Quick start
 
@@ -99,15 +99,25 @@ cp worker/.dev.vars.example worker/.dev.vars
 cd worker
 npm ci
 npm test
+npx wrangler login
+npx wrangler deploy
+```
+
+The first deployment serves health checks but refuses sessions until configured. Fill in `.dev.vars` with the deployed HTTPS origin as `WORKER_URL`, your API key, voice, device token, and private child profile. Set the same origin in `wifi_creds.h`. Leave `ELEVEN_AGENT_ID` empty to create a new agent:
+
+```sh
 ./scripts/configure_agent.sh
 ```
 
-Fill in `.dev.vars` first. On the first run, `configure_agent.sh` creates an agent and prints its ID; save it as `ELEVEN_AGENT_ID`. Upload `DEVICE_TOKEN`, `ELEVENLABS_API_KEY`, and `ELEVEN_AGENT_ID` with `npx wrangler secret put NAME`, then deploy manually:
+Save the printed ID as `ELEVEN_AGENT_ID` in `.dev.vars`. Upload only the three Worker secrets, then attach the webhook and verify the agent:
 
 ```sh
-npx wrangler deploy
+npx wrangler secret put DEVICE_TOKEN
+npx wrangler secret put ELEVENLABS_API_KEY
+npx wrangler secret put ELEVEN_AGENT_ID
 ./scripts/configure_progress_webhook.sh
 ./scripts/configure_agent.sh
+cd ..
 ```
 
 The second agent run attaches the signed progress webhook and verifies the live configuration. The default is `private blocking`; use `./scripts/configure_agent.sh diagnostics blocking` only during deliberate debugging. See [safety and privacy](docs/safety-and-privacy.md) before doing that.
@@ -117,7 +127,7 @@ The second agent run attaches the signed progress webhook and verifies the live 
 ```sh
 . /path/to/esp-idf-v5.5.4/export.sh
 idf.py -C firmware build
-idf.py -C firmware -p /dev/your-serial-port app-flash
+idf.py -C firmware -p /dev/your-serial-port flash
 idf.py -C firmware -p /dev/your-serial-port monitor
 ```
 
@@ -149,10 +159,13 @@ npm ci
 npm test
 npm run check
 python3 -m py_compile scripts/*.py
-bash -n scripts/*.sh
+for script in scripts/*.sh; do bash -n "$script"; done
 shellcheck scripts/*.sh
+python3 test/scripts_test.py
+cd ..
 
 . /path/to/esp-idf-v5.5.4/export.sh
+python3 firmware/test/run_net_test.py
 idf.py -C firmware build
 git diff --exit-code -- firmware/dependencies.lock
 ```

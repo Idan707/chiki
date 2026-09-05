@@ -200,7 +200,7 @@ else
 fi
 CODE=$(printf '%s\n' "$RESP" | tail -1)
 JSON=$(printf '%s\n' "$RESP" | sed '$d')
-case "$CODE" in 200|201) ;; *) echo "agent $ACTION failed ($CODE): $JSON" >&2; exit 1 ;; esac
+case "$CODE" in 200|201) ;; *) echo "agent request failed (HTTP $CODE); inspect the private provider dashboard" >&2; exit 1 ;; esac
 if [ "$ACTION" = created ]; then
   AGENT_ID=$(printf '%s' "$JSON" | jq -er '.agent_id')
 fi

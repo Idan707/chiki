@@ -1,7 +1,7 @@
 // Chiki Worker: authorize direct conversations and store normalized progress.
 import { DurableObject } from 'cloudflare:workers';
 import {
-  progressEvent, progressSnapshot, recordProgress, verifyElevenLabsSignature,
+  progressEvent, progressSnapshot, pruneProgress, recordProgress, verifyElevenLabsSignature,
 } from './progress.mjs';
 import { adventureFor } from './adventure.mjs';
 import { missingSessionSecrets, parseDailyCap } from './session.mjs';
@@ -14,22 +14,14 @@ export class SessionCounter extends DurableObject {
     const used = s.day === day ? s.used : 0;
     if (used >= cap) return { allowed: false };
     await this.ctx.storage.put('s', { ...s, day, used: used + 1, lastSeen: now });
-    // latestTopic reflects what was actually explored (webhook-fed); lastTheme is what
-    // we last offered, and stands in until the first post-call webhook lands.
+    // Only a completed, substantive exchange can supply a remembered topic.
     const progress = await this.ctx.storage.get('progress');
     return {
       allowed: true,
       previousSeen: s.lastSeen || 0,
       used: used + 1,
-      lastTheme: s.lastTheme || '',
       latestTopic: progress?.latest_topic || '',
     };
-  }
-
-  async rememberTheme(themeId) {
-    const s = (await this.ctx.storage.get('s')) || {};
-    if (s.lastTheme === themeId) return;
-    await this.ctx.storage.put('s', { ...s, lastTheme: themeId });
   }
 
   async progress(now) {
@@ -38,9 +30,18 @@ export class SessionCounter extends DurableObject {
 
   async recordProgress(conversationId, timestamp, topics) {
     const previous = await this.ctx.storage.get('progress');
-    const result = recordProgress(previous, conversationId, timestamp, topics);
+    const result = recordProgress(previous, conversationId, timestamp, topics, Date.now());
     if (!result.duplicate) await this.ctx.storage.put('progress', result.state);
+    if (await this.ctx.storage.getAlarm() === null)
+      await this.ctx.storage.setAlarm(Date.now() + 86_400_000);
     return { changed: result.changed, duplicate: result.duplicate, revision: result.state.revision || 0 };
+  }
+
+  async alarm() {
+    const state = pruneProgress(await this.ctx.storage.get('progress'), Date.now());
+    await this.ctx.storage.put('progress', state);
+    if (Object.keys(state.days).length || Object.keys(state.seen).length)
+      await this.ctx.storage.setAlarm(Date.now() + 86_400_000);
   }
 }
 
@@ -55,8 +56,9 @@ function json(obj, status = 200) {
 }
 
 async function upstreamFail(stage, res) {
-  const detail = (await res.text().catch(() => '')).slice(0, 500);
-  console.log(`[kidbot] ${stage} failed: ${res.status} ${detail}`);
+  // Upstream bodies can echo identifiers, prompts, or signed credentials.
+  console.log(`[chiki] ${stage} failed: HTTP ${res.status}`);
+  await res.body?.cancel();
   return json({ error: 'upstream unavailable' }, 502);
 }
 
@@ -92,8 +94,8 @@ export default {
   async fetch(request, env) {
     try {
       return await handle(request, env);
-    } catch (e) {
-      console.log(`[kidbot] unhandled: ${e}`);
+    } catch {
+      console.log('[chiki] request failed');
       return json({ error: 'internal' }, 500);
     }
   },
@@ -104,8 +106,8 @@ async function handle(request, env) {
   if (request.method === 'GET' && url.pathname === '/') return new Response('ok');
 
   if (request.method === 'POST' && url.pathname === '/webhooks/elevenlabs') {
-    if (!env.ELEVEN_WEBHOOK_SECRET) {
-      console.log('[kidbot] ELEVEN_WEBHOOK_SECRET is missing');
+    if (!env.ELEVEN_WEBHOOK_SECRET?.trim() || !env.ELEVEN_AGENT_ID?.trim()) {
+      console.log('[chiki] webhook configuration missing');
       return json({ error: 'service unavailable' }, 503);
     }
     const raw = await boundedText(request, 2 * 1024 * 1024);
@@ -149,7 +151,7 @@ async function handle(request, env) {
       return json({ error: 'service unavailable' }, 503);
     }
 
-    // The strongly consistent counter bounds minute drain if a token leaks.
+    // This caps signed-URL issuance, not reuse or total billed minutes.
     const now = Date.now();
     const day = new Date(now).toISOString().slice(0, 10);
     const counter = env.COUNTER.get(env.COUNTER.idFromName('device'));
@@ -158,18 +160,17 @@ async function handle(request, env) {
 
     const su = await fetch(
       `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(env.ELEVEN_AGENT_ID)}`,
-      { headers: { 'xi-api-key': env.ELEVENLABS_API_KEY } },
+      { headers: { 'xi-api-key': env.ELEVENLABS_API_KEY }, signal: AbortSignal.timeout(8000) },
     );
     if (!su.ok) return upstreamFail('signed-url', su);
     const signedUrl = (await su.json()).signed_url;
-    if (typeof signedUrl !== 'string' || !signedUrl) {
+    if (typeof signedUrl !== 'string' || !signedUrl.startsWith('wss://')) {
       console.log('[kidbot] signed-url response missing signed_url');
       return json({ error: 'upstream unavailable' }, 502);
     }
     const adventure = adventureFor(
-      now, session.previousSeen, session.used, session.latestTopic || session.lastTheme,
+      now, session.previousSeen, session.used, session.latestTopic,
     );
-    await counter.rememberTheme(adventure.weekly_theme_id);
     return json({
       signed_url: signedUrl,
       dynamic_variables: {

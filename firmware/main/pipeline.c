@@ -106,17 +106,14 @@ static void on_message(char *msg, size_t len)
         s_pong_id = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(ev, "event_id"));
     } else if (!strcmp(type, "user_transcript")) {
         face_set_state(FACE_THINKING);      // kid's turn ended, agent working
-        ESP_LOGI(TAG, "heard: %s", cJSON_GetStringValue(cJSON_GetObjectItem(
-            cJSON_GetObjectItem(root, "user_transcription_event"), "user_transcript")));
+        ESP_LOGI(TAG, "user turn received");
     } else if (!strcmp(type, "agent_response")) {
-        ESP_LOGI(TAG, "agent: %s", cJSON_GetStringValue(cJSON_GetObjectItem(
-            cJSON_GetObjectItem(root, "agent_response_event"), "agent_response")));
+        ESP_LOGI(TAG, "agent turn received");
     } else if (!strcmp(type, "agent_response_complete")) {
         xEventGroupSetBits(s_eg, BIT_AGENT_DONE);
     } else if (!strcmp(type, "conversation_initiation_metadata")) {
         const cJSON *ev = cJSON_GetObjectItem(root, "conversation_initiation_metadata_event");
-        ESP_LOGI(TAG, "session up id=%s audio out=%s in=%s",
-                 cJSON_GetStringValue(cJSON_GetObjectItem(ev, "conversation_id")),
+        ESP_LOGI(TAG, "session up audio out=%s in=%s",
                  cJSON_GetStringValue(cJSON_GetObjectItem(ev, "agent_output_audio_format")),
                  cJSON_GetStringValue(cJSON_GetObjectItem(ev, "user_input_audio_format")));
     }
@@ -258,8 +255,8 @@ static void session(void)
     atomic_store(&s_session_active, true);
     bool tx_started = false;
     face_set_state(FACE_THINKING);
-    static char url[768];
-    static char dyn[512];
+    static char url[NET_SIGNED_URL_CAP];
+    static char dyn[NET_DYNAMIC_VARIABLES_CAP];
     if (net_get_signed_url(url, sizeof(url), dyn, sizeof(dyn)) != ESP_OK) {
         goto fail;
     }
@@ -278,7 +275,7 @@ static void session(void)
         .crt_bundle_attach = esp_crt_bundle_attach,
         .buffer_size = 4096,   // internal RAM; fragments reassemble into s_acc anyway
         .task_stack = 8192,
-        .disable_auto_reconnect = true,     // signed URL is single-use
+        .disable_auto_reconnect = true,     // raw conversations cannot be resumed
         .network_timeout_ms = 10000,
     };
     s_ws = esp_websocket_client_init(&cfg);
@@ -299,13 +296,13 @@ static void session(void)
     }
     // server won't speak the greeting until the client announces itself;
     // dynamic_variables = worker-picked weekly adventure for the first message
-    static char hello[640];
+    static char hello[NET_DYNAMIC_VARIABLES_CAP + 128];
     int hn = dyn[0]
         ? snprintf(hello, sizeof(hello), "{\"type\":\"conversation_initiation_"
                    "client_data\",\"dynamic_variables\":%s}", dyn)
         : snprintf(hello, sizeof(hello),
                    "{\"type\":\"conversation_initiation_client_data\"}");
-    if (!ws_send(hello, hn, "conversation initiation")) {
+    if (hn < 0 || hn >= sizeof(hello) || !ws_send(hello, hn, "conversation initiation")) {
         goto close_audio;
     }
     tx_started = xTaskCreate(tx_task, "audio_tx", 6144, NULL, 4, NULL) == pdPASS;
@@ -348,9 +345,8 @@ static void session(void)
 
         if (xTaskGetTickCount() - s_last_audio > pdMS_TO_TICKS(10000) &&
             !(bits & BIT_AGENT_DONE)) {
-            ESP_LOGW(TAG, "agent_response_complete missing; using 10s failsafe");
-            xEventGroupSetBits(s_eg, BIT_AGENT_DONE);
-            bits |= BIT_AGENT_DONE;
+            ESP_LOGW(TAG, "agent_response_complete missing; ending session");
+            break;
         }
 
         if (phase == BUFFERING || queued == 0) {

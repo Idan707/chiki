@@ -21,13 +21,17 @@ ElevenLabs -- signed post-call webhook --> Worker Durable Object
 device -- bearer token --> Worker /progress --> local NVS cache
 ```
 
-Cloudflare processes authentication, session counters, and normalized progress. ElevenLabs processes live audio, transcription, agent inference, synthesized speech, and configured post-call analysis. Your network provider and hosting region may add other processing paths. Review the providers' current terms, data locations, subprocessors, and account settings before use.
+Cloudflare processes authentication, session counters, and normalized progress. Its Worker also receives the full signed post-call transcript and analysis, processes them in memory, and discards them after extracting allowlisted progress. ElevenLabs processes live audio, transcription, agent inference, synthesized speech, the configured child profile, and post-call analysis. Your network provider and hosting region may add other processing paths. Review the providers' current terms, data locations, subprocessors, and account settings before use.
 
 ## What Chiki stores
 
-The Worker progress store is intentionally narrow: normalized topic IDs, Jerusalem-local dates, aggregate counts, a revision, the latest topic, and short-lived conversation-ID hashes for deduplication. Only the fixed allowlist in `worker/src/progress.mjs` is accepted.
+The Worker progress store is intentionally narrow: normalized topic IDs, Jerusalem-local dates, aggregate counts, a revision, the latest topic, and opaque conversation IDs for deduplication. These IDs are not hashes. Only the fixed topic allowlist in `worker/src/progress.mjs` is accepted. IDs expire after 48 hours and a daily cleanup alarm removes them even if no new calls arrive (normally within 72 hours of receipt). The alarm also removes day-level detail outside the Sunday-aligned 84-day calendar. Lifetime counts, the latest topic, and session-counter state remain until the maintainer deletes the device's Durable Object data. Webhook events older than 48 hours are ignored.
 
-The Worker does **not** persist webhook transcripts, audio, summaries, rationales, or arbitrary child text. The device NVS cache holds the compact progress view and preserves the last valid snapshot if refresh fails.
+The Worker does **not** persist webhook transcripts, audio, summaries, rationales, or arbitrary child text. Worker error logs omit upstream bodies; firmware logs omit conversation text and IDs. The device NVS cache holds the compact progress view and preserves the last valid snapshot if refresh fails. It remains on the device until replaced or erased; Worker retention does not remotely erase an offline device.
+
+When upgrading an existing Worker, the first accepted webhook schedules cleanup. Deployment alone does not purge previously stored progress.
+
+Host acceptance tools process the maintainer-supplied recording. Prefer `--no-play`; optional local playback uses temporary audio files that are removed afterward. Never share test output without reviewing it for identifiers and private provider details.
 
 ## Recording and retention modes
 

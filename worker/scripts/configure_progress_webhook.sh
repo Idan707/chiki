@@ -22,7 +22,7 @@ if [ -z "$ID" ]; then
   CODE=$(printf '%s\n' "$RESP" | tail -1)
   CREATED=$(printf '%s\n' "$RESP" | sed '$d')
   [ "$CODE" = 200 ] || {
-    echo "webhook creation failed ($CODE): $(printf '%s' "$CREATED" | jq -r '.detail.message // .detail // .')" >&2
+    echo "webhook creation failed (HTTP $CODE); inspect the private provider dashboard" >&2
     exit 1
   }
   ID=$(printf '%s' "$CREATED" | jq -er '.webhook_id')
@@ -42,12 +42,18 @@ if [ -z "$ID" ]; then
   chmod 600 "$TMP"
   mv "$TMP" .dev.vars
   TMP=
-  # Only now push to Cloudflare: .dev.vars already holds the one-time secret, so a
-  # failure here is recoverable by re-running instead of losing the webhook.
-  printf '%s' "$SECRET" | npx --no-install wrangler secret put ELEVEN_WEBHOOK_SECRET >/dev/null
   unset SECRET
-  echo "created webhook and stored its HMAC secret in Cloudflare and .dev.vars"
+  echo "created webhook and saved its HMAC secret in .dev.vars"
 fi
+
+# Retry this even for an existing webhook if the first Cloudflare upload failed.
+SECRET=$(dev_var ELEVEN_WEBHOOK_SECRET)
+[ -n "$SECRET" ] || {
+  echo "ELEVEN_WEBHOOK_SECRET missing; recover the matching webhook secret before retrying" >&2
+  exit 1
+}
+printf '%s' "$SECRET" | npx --no-install wrangler secret put ELEVEN_WEBHOOK_SECRET >/dev/null
+unset SECRET
 
 # Post-call transcript delivery is bound on the agent, not here: configure_agent.sh
 # sets platform_settings.workspace_overrides.webhooks.post_call_webhook_id with

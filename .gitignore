@@ -12,3 +12,10 @@ firmware/main/wifi_creds.h
 firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
+# Never publish recordings or locally built firmware, including ad hoc outputs.
+*.wav
+*.mp3
+*.pcm
+*.bin
+*.elf
+*.map

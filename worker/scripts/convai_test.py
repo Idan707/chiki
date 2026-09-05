@@ -10,6 +10,7 @@ import contextlib
 import json
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 import wave
@@ -29,7 +30,7 @@ def dev_var(name):
 
 def request_json(url, headers):
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as response:
+    with urllib.request.urlopen(req, timeout=20) as response:
         return json.load(response)
 
 
@@ -50,14 +51,15 @@ def pcm16k(wav_path):
 
 
 def play(pcm, name):
-    out = Path(f"/tmp/kidbot_{name}.wav")
-    with wave.open(str(out), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(16000)
-        wav.writeframes(pcm)
-    print(f"[{name}] {len(pcm) / 32000:.1f}s -> {out}")
-    subprocess.run(["afplay", str(out)], check=True)
+    with tempfile.TemporaryDirectory(prefix="chiki-playback-") as directory:
+        out = Path(directory) / f"{name}.wav"
+        with wave.open(str(out), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(16000)
+            wav.writeframes(pcm)
+        print(f"[{name}] playing {len(pcm) / 32000:.1f}s")
+        subprocess.run(["afplay", str(out)], check=True)
 
 
 async def send_audio(ws, lock, pcm):
@@ -91,17 +93,16 @@ async def collect_turn(ws, lock, label, metadata, max_s=60):
                 raise AssertionError(f"{label} completed without audio")
             return bytes(audio), first_audio
         elif event_type == "agent_response":
-            print(f"[{label}] agent: {message['agent_response_event']['agent_response']}")
+            print(f"[{label}] agent response received")
         elif event_type == "user_transcript":
-            print(f"[{label}] heard: {message['user_transcription_event']['user_transcript']}")
+            print(f"[{label}] user transcript received")
         elif event_type == "ping":
             pong = {"type": "pong", "event_id": message["ping_event"]["event_id"]}
             async with lock:
                 await ws.send(json.dumps(pong))
         elif event_type == "conversation_initiation_metadata":
             metadata.update(message["conversation_initiation_metadata_event"])
-            print(f"[meta] id={metadata.get('conversation_id')} "
-                  f"out={metadata.get('agent_output_audio_format')} "
+            print(f"[meta] out={metadata.get('agent_output_audio_format')} "
                   f"in={metadata.get('user_input_audio_format')}")
         else:
             print(f"[{label}] event: {event_type}")
@@ -176,7 +177,7 @@ def main():
     assert not any("Audio duration mismatch" in warning for warning in warnings), warnings
     assert reason.endswith("1000"), reason
     assert greeting and answer
-    print(f"[pass] conversation={conversation_id} close=1000 continuity=clean")
+    print("[pass] close=1000 continuity=clean")
     if "--no-play" not in sys.argv:
         play(greeting, "greeting")
         play(answer, "answer")

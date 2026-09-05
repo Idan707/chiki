@@ -47,10 +47,12 @@ void net_wifi_start(EventGroupHandle_t eg)
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
-esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
+static esp_err_t get_json(const char *url, char *out, size_t cap)
 {
+    if (!out || cap < 2) return ESP_ERR_INVALID_ARG;
+    out[0] = 0;
     esp_http_client_config_t cfg = {
-        .url = WORKER_URL "/session",
+        .url = url,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 10000,
     };
@@ -61,82 +63,58 @@ esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
     esp_http_client_set_header(client, "Authorization", "Bearer " DEVICE_TOKEN);
 
     esp_err_t err = ESP_FAIL;
-    char body[1024];
     if (esp_http_client_open(client, 0) != ESP_OK) {
         goto out;
     }
     if (esp_http_client_fetch_headers(client) < 0 ||
         esp_http_client_get_status_code(client) != 200) {
-        ESP_LOGE(TAG, "session http %d", esp_http_client_get_status_code(client));
+        ESP_LOGE(TAG, "request http %d", esp_http_client_get_status_code(client));
         goto out;
     }
-    int n = esp_http_client_read(client, body, sizeof(body) - 1);
-    if (n <= 0) {
-        goto out;
+    size_t used = 0;
+    for (;;) {
+        if (used == cap - 1) {
+            ESP_LOGE(TAG, "response too large");
+            goto out;
+        }
+        int n = esp_http_client_read(client, out + used, cap - 1 - used);
+        if (n <= 0) {
+            if (n == 0 && esp_http_client_is_complete_data_received(client)) break;
+            goto out;
+        }
+        used += n;
     }
-    body[n] = 0;
+    out[used] = 0;
+    err = ESP_OK;
+out:
+    if (err != ESP_OK) out[0] = 0;
+    esp_http_client_cleanup(client);
+    return err;
+}
 
-    cJSON *root = cJSON_Parse(body);
-    const cJSON *su = cJSON_GetObjectItem(root, "signed_url");
-    if (cJSON_IsString(su) && strlen(su->valuestring) < cap) {
+esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
+{
+    if (!out || !dyn || cap < 2 || dyn_cap < 2) return ESP_ERR_INVALID_ARG;
+    out[0] = dyn[0] = 0;
+    char body[NET_SESSION_BODY_CAP];
+    if (get_json(WORKER_URL "/session", body, sizeof(body)) != ESP_OK) return ESP_FAIL;
+    cJSON *root = cJSON_ParseWithOpts(body, NULL, true);
+    const cJSON *su = cJSON_GetObjectItemCaseSensitive(root, "signed_url");
+    const cJSON *variables = cJSON_GetObjectItemCaseSensitive(root, "dynamic_variables");
+    char *dv = cJSON_IsObject(variables) ? cJSON_PrintUnformatted(variables) : NULL;
+    esp_err_t err = ESP_FAIL;
+    if (cJSON_IsString(su) && !strncmp(su->valuestring, "wss://", 6) &&
+        strlen(su->valuestring) < cap && dv && strlen(dv) < dyn_cap) {
         strcpy(out, su->valuestring);
+        strcpy(dyn, dv);
         err = ESP_OK;
     }
-    dyn[0] = 0;
-    char *dv = cJSON_PrintUnformatted(cJSON_GetObjectItem(root, "dynamic_variables"));
-    if (dv) {
-        if (strlen(dv) < dyn_cap) {
-            strcpy(dyn, dv);
-        }
-        cJSON_free(dv);
-    }
+    cJSON_free(dv);
     cJSON_Delete(root);
-out:
-    esp_http_client_cleanup(client);
     return err;
 }
 
 esp_err_t net_get_progress(char *out, size_t cap)
 {
-    if (!out || cap < 2) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    esp_http_client_config_t cfg = {
-        .url = WORKER_URL "/progress",
-        .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 10000,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) {
-        return ESP_FAIL;
-    }
-    esp_http_client_set_header(client, "Authorization", "Bearer " DEVICE_TOKEN);
-
-    esp_err_t err = ESP_FAIL;
-    size_t used = 0;
-    if (esp_http_client_open(client, 0) != ESP_OK) {
-        goto out;
-    }
-    if (esp_http_client_fetch_headers(client) < 0 ||
-        esp_http_client_get_status_code(client) != 200) {
-        ESP_LOGE(TAG, "progress http %d", esp_http_client_get_status_code(client));
-        goto out;
-    }
-    while (used < cap - 1) {
-        int n = esp_http_client_read(client, out + used, cap - 1 - used);
-        if (n < 0) {
-            goto out;
-        }
-        if (n == 0) {
-            out[used] = 0;
-            err = ESP_OK;
-            goto out;
-        }
-        used += n;
-    }
-    ESP_LOGE(TAG, "progress response too large");
-
-out:
-    esp_http_client_cleanup(client);
-    return err;
+    return get_json(WORKER_URL "/progress", out, cap);
 }
