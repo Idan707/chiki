@@ -46,11 +46,13 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 
 ## Audio invariants
 
-- PCM is always 16 kHz, signed 16-bit, mono in both directions.
-- Keep half duplex: upload microphone PCM only while listening; upload equal-duration zero PCM while buffering, playing, and flushing microphone input.
-- Playback ends only after `agent_response_complete` and an empty playback queue. Packet gaps are not response boundaries.
+- PCM is always 16 kHz, signed 16-bit, mono in both directions. The Worker resamples synthesis down to 16 kHz so the device never sees another rate.
+- Audio travels as raw PCM in binary frames; control messages are `{"t": ...}` text frames under 4 KB. Do not reintroduce base64-in-JSON audio.
+- Keep half duplex: upload microphone PCM only while listening, and upload nothing while buffering, playing, or flushing. The old equal-duration zero PCM existed to keep a third-party timeline aligned; our Worker owns turn detection, so silence on the wire is silence.
+- Playback ends only after the `{"t":"done"}` frame and an empty playback queue. Packet gaps are not response boundaries.
 - Keep `PREBUFFER` in `firmware/main/pipeline.c` as a hardware calibration knob. The current `48,000` bytes is the measured 1.5-second setting.
-- Keep automatic WebSocket reconnect disabled because a signed raw conversation cannot be resumed safely.
+- Every use of `s_ws` goes through `s_ws_lock`, and teardown nulls it while holding that lock. Destroying the client under a blocked `tx_task` panics with `LoadProhibited`, which reboots the board and wedges a display that has no reset line.
+- Keep automatic WebSocket reconnect disabled because a session ticket is single-use.
 
 ## Safety and privacy rules
 

@@ -1,7 +1,9 @@
-// Conversation session: tap -> signed URL from worker -> ElevenLabs agent
-// WebSocket. Half-duplex by construction: the one task below either pumps mic
-// chunks up or drains agent audio to the speaker, never both, so the agent
-// can't hear itself (no AEC needed, no barge-in).
+// Conversation session: tap -> ticketed wss URL from our Worker -> Worker
+// WebSocket. The Worker runs the whole loop (transcribe, answer, screen the
+// reply, synthesise) and streams 16 kHz PCM back, so the device stays a thin
+// audio endpoint and no API key ever reaches it. Half-duplex by construction:
+// the one task below either pumps mic chunks up or drains agent audio to the
+// speaker, never both, so the agent can't hear itself (no AEC, no barge-in).
 #include "pipeline.h"
 #include "audio.h"
 #include "face.h"
@@ -19,7 +21,6 @@
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
-#include "mbedtls/base64.h"
 
 static const char *TAG = "pipeline";
 
@@ -28,17 +29,17 @@ static const char *TAG = "pipeline";
 #define BIT_AGENT_DONE  BIT3
 
 #define MIC_CHUNK   8192                      // 256ms @ 16k/16/mono
-#define MIC_JSON_SZ (MIC_CHUNK / 3 * 4 + 64)  // {"user_audio_chunk":"<b64>"}
-#define ACC_CAP     (1536 * 1024)             // one ws message, reassembled
-#define DEC_CAP     (1152 * 1024)             // base64-decoded audio scratch
+// Audio is raw PCM in binary frames both ways now, not base64 inside JSON. That
+// removes the encode/decode step and the two multi-megabyte scratch buffers the
+// ElevenLabs protocol needed; control messages are small text frames.
+#define ACC_CAP     (256 * 1024)              // one ws message, reassembled
 #define PLAY_BUF    (2 * 1024 * 1024)         // ~65s of agent audio
 #define TX_BUF      (256 * 1024)               // 8s upload cushion; network must never stall speaker
 #define PREBUFFER   48000                     // 1.5s: TTS arrives in bursts; less = mid-sentence stutter
-// Session scratch. These live in PSRAM, not .bss: the LCD needs a large
-// contiguous internal DMA buffer per redraw, and TLS handshakes already crowd
-// internal RAM enough to make it fail.
+#define CTRL_MAX    4096                      // control frames are tiny; ignore anything bigger
+// PSRAM, not .bss: the LCD needs a large contiguous internal DMA block per
+// redraw and TLS handshakes already crowd internal RAM.
 #define DYN_SZ      1024                      // widest weekly adventure is ~585 bytes
-#define HELLO_SZ    1280                      // must stay ahead of DYN_SZ plus framing
 
 static EventGroupHandle_t s_eg;
 static esp_websocket_client_handle_t s_ws;
@@ -47,14 +48,12 @@ static esp_websocket_client_handle_t s_ws;
 // use of s_ws goes through this lock, and teardown nulls it while holding it.
 static SemaphoreHandle_t s_ws_lock;
 static StreamBufferHandle_t s_play, s_tx;
-static uint8_t *s_acc, *s_dec, *s_tx_pcm;
-static char *s_mic_json;
-static char *s_dyn, *s_hello;
+static uint8_t *s_acc, *s_tx_pcm;
+static char *s_dyn;
 static size_t s_acc_len;
-static bool s_acc_drop;
+static bool s_acc_drop, s_acc_bin;
 static volatile bool s_ws_up;
 static volatile bool s_end_req;
-static volatile int s_pong_id = -1;
 static volatile TickType_t s_last_audio;
 static volatile size_t s_play_dropped;
 static volatile bool s_tx_stop, s_tx_done;
@@ -72,64 +71,53 @@ void pipeline_touch(bool pressed)
     xEventGroupSetBits(s_eg, BIT_PRESS);
 }
 
-// Complete ws text message. Audio events can be huge - grab the base64 span
-// by hand instead of letting cJSON duplicate the payload; everything else is
-// small and goes through cJSON.
-static void on_message(char *msg, size_t len)
+// Agent audio: a complete binary frame of raw PCM, straight to the speaker
+// queue. No parsing, no decode, no copy beyond the queue itself.
+static void on_audio(const uint8_t *pcm, size_t len)
 {
-    char *b64 = strstr(msg, "\"audio_base_64\":\"");
-    if (b64) {
-        b64 += 17;
-        char *end = strchr(b64, '"');
-        if (!end) {
-            return;
-        }
-        size_t out_len = 0;
-        if (mbedtls_base64_decode(s_dec, DEC_CAP, &out_len,
-                                  (uint8_t *)b64, end - b64) != 0) {
-            ESP_LOGE(TAG, "b64 decode failed (%u chars)", (unsigned)(end - b64));
-            return;
-        }
-        size_t sent = xStreamBufferSend(s_play, s_dec, out_len, 0);
-        if (sent < out_len) {
-            s_play_dropped += out_len - sent;
-            ESP_LOGW(TAG, "play buffer full, dropped=%u total=%u",
-                     (unsigned)(out_len - sent), (unsigned)s_play_dropped);
-        }
-        s_last_audio = xTaskGetTickCount();
-        xEventGroupSetBits(s_eg, BIT_AGENT_AUDIO);
-        return;
+    size_t sent = xStreamBufferSend(s_play, pcm, len, 0);
+    if (sent < len) {
+        s_play_dropped += len - sent;
+        ESP_LOGW(TAG, "play buffer full, dropped=%u total=%u",
+                 (unsigned)(len - sent), (unsigned)s_play_dropped);
     }
-    if (len > 8192) {
-        return;  // unknown jumbo message
+    s_last_audio = xTaskGetTickCount();
+    xEventGroupSetBits(s_eg, BIT_AGENT_AUDIO);
+}
+
+// Control: small text frames from our own Worker. The Worker owns turn
+// detection, the safety screen and synthesis, so the device only reacts.
+static void on_control(char *msg, size_t len)
+{
+    if (len > CTRL_MAX) {
+        ESP_LOGW(TAG, "oversized control frame (%u bytes)", (unsigned)len);
+        return;
     }
     cJSON *root = cJSON_Parse(msg);
     if (!root) {
         return;
     }
-    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(root, "type"));
+    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(root, "t"));
     if (!type) {
         cJSON_Delete(root);
         return;
     }
-    if (!strcmp(type, "ping")) {
-        const cJSON *ev = cJSON_GetObjectItem(root, "ping_event");
-        s_pong_id = (int)cJSON_GetNumberValue(cJSON_GetObjectItem(ev, "event_id"));
-    } else if (!strcmp(type, "user_transcript")) {
-        face_set_state(FACE_THINKING);      // kid's turn ended, agent working
-        ESP_LOGI(TAG, "heard: %s", cJSON_GetStringValue(cJSON_GetObjectItem(
-            cJSON_GetObjectItem(root, "user_transcription_event"), "user_transcript")));
-    } else if (!strcmp(type, "agent_response")) {
-        ESP_LOGI(TAG, "agent: %s", cJSON_GetStringValue(cJSON_GetObjectItem(
-            cJSON_GetObjectItem(root, "agent_response_event"), "agent_response")));
-    } else if (!strcmp(type, "agent_response_complete")) {
+    if (!strcmp(type, "ready")) {
+        ESP_LOGI(TAG, "session up id=%s", cJSON_GetStringValue(
+            cJSON_GetObjectItem(root, "id")));
+    } else if (!strcmp(type, "thinking")) {
+        face_set_state(FACE_THINKING);      // kid's turn ended, worker working
+        ESP_LOGI(TAG, "heard: %s", cJSON_GetStringValue(
+            cJSON_GetObjectItem(root, "text")));
+    } else if (!strcmp(type, "speaking")) {
+        ESP_LOGI(TAG, "agent: %s", cJSON_GetStringValue(
+            cJSON_GetObjectItem(root, "text")));
+    } else if (!strcmp(type, "done")) {
         xEventGroupSetBits(s_eg, BIT_AGENT_DONE);
-    } else if (!strcmp(type, "conversation_initiation_metadata")) {
-        const cJSON *ev = cJSON_GetObjectItem(root, "conversation_initiation_metadata_event");
-        ESP_LOGI(TAG, "session up id=%s audio out=%s in=%s",
-                 cJSON_GetStringValue(cJSON_GetObjectItem(ev, "conversation_id")),
-                 cJSON_GetStringValue(cJSON_GetObjectItem(ev, "agent_output_audio_format")),
-                 cJSON_GetStringValue(cJSON_GetObjectItem(ev, "user_input_audio_format")));
+    } else if (!strcmp(type, "bye")) {
+        ESP_LOGI(TAG, "worker ended the session: %s", cJSON_GetStringValue(
+            cJSON_GetObjectItem(root, "why")));
+        s_end_req = true;
     }
     cJSON_Delete(root);
 }
@@ -165,11 +153,12 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             s_ws_up = false;
             break;
         }
-        if (e->op_code != 0x01 && e->op_code != 0x00) {
-            break;                          // text + continuation only
+        if (e->op_code != 0x01 && e->op_code != 0x02 && e->op_code != 0x00) {
+            break;                          // text, binary and continuation only
         }
         if (e->payload_offset == 0) {
             s_acc_len = 0;
+            s_acc_bin = e->op_code == 0x02;  // continuations carry op_code 0
             s_acc_drop = e->payload_len > ACC_CAP - 1;
             if (s_acc_drop) {
                 ESP_LOGW(TAG, "dropping %d byte message", e->payload_len);
@@ -179,20 +168,26 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             memcpy(s_acc + s_acc_len, e->data_ptr, e->data_len);
             s_acc_len += e->data_len;
             if ((int)s_acc_len == e->payload_len) {
-                s_acc[s_acc_len] = 0;
-                on_message((char *)s_acc, s_acc_len);
+                if (s_acc_bin) {
+                    on_audio(s_acc, s_acc_len);
+                } else {
+                    s_acc[s_acc_len] = 0;
+                    on_control((char *)s_acc, s_acc_len);
+                }
             }
         }
         break;
     }
 }
 
-static bool ws_send(const char *data, int len, const char *what)
+static bool ws_send(const char *data, int len, bool binary, const char *what)
 {
     for (int attempt = 0; attempt < 2; attempt++) {
         xSemaphoreTake(s_ws_lock, portMAX_DELAY);
         int sent = s_ws
-            ? esp_websocket_client_send_text(s_ws, data, len, pdMS_TO_TICKS(2000))
+            ? (binary
+               ? esp_websocket_client_send_bin(s_ws, data, len, pdMS_TO_TICKS(2000))
+               : esp_websocket_client_send_text(s_ws, data, len, pdMS_TO_TICKS(2000)))
             : -1;                           // torn down under us; fail, don't crash
         xSemaphoreGive(s_ws_lock);
         if (sent == len) {
@@ -208,44 +203,21 @@ static bool ws_send(const char *data, int len, const char *what)
     return false;
 }
 
-static bool send_pong(void)
-{
-    int id = s_pong_id;
-    if (id < 0) {
-        return true;
-    }
-    s_pong_id = -1;
-    char pong[48];
-    int n = snprintf(pong, sizeof(pong), "{\"type\":\"pong\",\"event_id\":%d}", id);
-    return ws_send(pong, n, "pong");
-}
-
+// Raw PCM in a binary frame: no base64, so no 33% inflation and no scratch
+// buffer. The Worker owns turn detection, so the device just keeps streaming
+// while it is listening.
 static bool send_audio_chunk(const uint8_t *pcm, size_t len)
 {
     if (len == 0 || len > MIC_CHUNK) {
         ESP_LOGE(TAG, "invalid mic chunk length=%u", (unsigned)len);
         return false;
     }
-    size_t b64_len = 0;
-    memcpy(s_mic_json, "{\"user_audio_chunk\":\"", 21);
-    int rc = mbedtls_base64_encode((uint8_t *)s_mic_json + 21,
-                                   MIC_JSON_SZ - 24, &b64_len, pcm, len);
-    if (rc != 0) {
-        ESP_LOGE(TAG, "mic b64 encode failed rc=%d length=%u", rc, (unsigned)len);
-        return false;
-    }
-    memcpy(s_mic_json + 21 + b64_len, "\"}", 2);
-    int expected = 21 + b64_len + 2;
-    return ws_send(s_mic_json, expected, "audio");
+    return ws_send((const char *)pcm, len, true, "audio");
 }
 
 static void tx_task(void *arg)
 {
     while (!s_tx_stop && s_ws_up) {
-        if (!send_pong()) {
-            s_ws_up = false;
-            break;
-        }
         size_t n = xStreamBufferReceive(s_tx, s_tx_pcm, MIC_CHUNK,
                                         pdMS_TO_TICKS(100));
         if (n > 0 && !send_audio_chunk(s_tx_pcm, n)) {
@@ -280,7 +252,6 @@ static void session(void)
     }
 
     s_acc_len = 0;
-    s_pong_id = -1;
     s_play_dropped = 0;
     s_tx_stop = false;
     s_tx_done = false;
@@ -293,7 +264,7 @@ static void session(void)
         .crt_bundle_attach = esp_crt_bundle_attach,
         .buffer_size = 4096,   // internal RAM; fragments reassemble into s_acc anyway
         .task_stack = 8192,
-        .disable_auto_reconnect = true,     // signed URL is single-use
+        .disable_auto_reconnect = true,     // the session ticket is single-use
         .network_timeout_ms = 10000,
     };
     s_ws = esp_websocket_client_init(&cfg);
@@ -312,23 +283,10 @@ static void session(void)
     if (!s_ws_up || audio_open() != ESP_OK) {
         goto fail_ws;
     }
-    // server won't speak the greeting until the client announces itself;
-    // dynamic_variables = worker-picked weekly adventure for the first message
-    char *hello = s_hello;
-    int hn = dyn[0]
-        ? snprintf(hello, HELLO_SZ, "{\"type\":\"conversation_initiation_"
-                   "client_data\",\"dynamic_variables\":%s}", dyn)
-        : snprintf(hello, HELLO_SZ,
-                   "{\"type\":\"conversation_initiation_client_data\"}");
-    // snprintf returns what it *would* have written: sending that length raw
-    // would read past the buffer and ship the overrun to the agent
-    if (hn < 0 || hn >= HELLO_SZ) {
-        ESP_LOGE(TAG, "initiation frame truncated: %d needs %d", hn, HELLO_SZ);
-        goto close_audio;
-    }
-    if (!ws_send(hello, hn, "conversation initiation")) {
-        goto close_audio;
-    }
+    // No client hello: the Worker picked this session's adventure and holds it
+    // against the ticket, so it opens the conversation on its own. dyn is kept
+    // only as a diagnostic that the pairing is intact.
+    ESP_LOGI(TAG, "adventure: %s", dyn[0] ? dyn : "(worker-side)");
     tx_started = xTaskCreate(tx_task, "audio_tx", 6144, NULL, 4, NULL) == pdPASS;
     if (!tx_started) {
         ESP_LOGE(TAG, "audio sender task creation failed");
@@ -369,17 +327,19 @@ static void session(void)
 
         if (xTaskGetTickCount() - s_last_audio > pdMS_TO_TICKS(10000) &&
             !(bits & BIT_AGENT_DONE)) {
-            ESP_LOGW(TAG, "agent_response_complete missing; using 10s failsafe");
+            ESP_LOGW(TAG, "turn-done frame missing; using 10s failsafe");
             xEventGroupSetBits(s_eg, BIT_AGENT_DONE);
             bits |= BIT_AGENT_DONE;
         }
 
+        // Nothing is uploaded once the agent has the floor. The old protocol
+        // needed equal-duration zero PCM to keep the remote timeline aligned;
+        // our Worker owns turn detection, so silence on the wire is silence.
         if (phase == BUFFERING || queued == 0) {
             if (phase == PLAYING && (bits & BIT_AGENT_DONE)) {
                 for (int i = 0; i < 2; i++) {
                     int n = audio_read(pcm, sizeof(pcm));  // flush speaker bleed
-                    if (n <= 0 || audio_write((void *)silence, n) < 0 ||
-                        !queue_audio(silence, n)) {
+                    if (n <= 0 || audio_write((void *)silence, n) < 0) {
                         ESP_LOGE(TAG, "microphone flush failed: %d", n);
                         goto close_audio;
                     }
@@ -389,8 +349,7 @@ static void session(void)
                 face_set_state(FACE_LISTENING);
                 continue;
             }
-            if (audio_write((void *)silence, sizeof(silence)) < 0 ||
-                !queue_audio(silence, sizeof(silence))) {
+            if (audio_write((void *)silence, sizeof(silence)) < 0) {
                 ESP_LOGE(TAG, "buffering silence failed");
                 break;
             }
@@ -404,9 +363,6 @@ static void session(void)
         }
         if (audio_write(pcm, n) < 0) {
             ESP_LOGE(TAG, "speaker write failed length=%u", (unsigned)n);
-            break;
-        }
-        if (!queue_audio(silence, n)) {
             break;
         }
     }
@@ -480,25 +436,22 @@ void pipeline_start(void)
     s_eg = xEventGroupCreate();
     s_ws_lock = xSemaphoreCreateMutex();
     s_acc = heap_caps_malloc(ACC_CAP, MALLOC_CAP_SPIRAM);
-    s_dec = heap_caps_malloc(DEC_CAP, MALLOC_CAP_SPIRAM);
     s_tx_pcm = heap_caps_malloc(MIC_CHUNK, MALLOC_CAP_SPIRAM);
-    s_mic_json = heap_caps_malloc(MIC_JSON_SZ, MALLOC_CAP_SPIRAM);
     s_dyn = heap_caps_malloc(DYN_SZ, MALLOC_CAP_SPIRAM);
-    s_hello = heap_caps_malloc(HELLO_SZ, MALLOC_CAP_SPIRAM);
     s_play = xStreamBufferCreateWithCaps(PLAY_BUF, 4096, MALLOC_CAP_SPIRAM);  // chunky reads, no dribble
     s_tx = xStreamBufferCreateWithCaps(TX_BUF, 1, MALLOC_CAP_SPIRAM);
 
-    if (!s_acc || !s_dec || !s_tx_pcm || !s_mic_json || !s_play || !s_tx ||
-        !s_ws_lock || !s_dyn || !s_hello) {
+    if (!s_acc || !s_tx_pcm || !s_play || !s_tx ||
+        !s_ws_lock || !s_dyn) {
         ESP_LOGE(TAG, "psram exhausted: wanted %u bytes, free=%u largest=%u "
-                 "(acc=%d dec=%d tx_pcm=%d mic_json=%d play=%d tx=%d)",
-                 (unsigned)(ACC_CAP + DEC_CAP + MIC_CHUNK + MIC_JSON_SZ + PLAY_BUF + TX_BUF),
+                 "(acc=%d tx_pcm=%d play=%d tx=%d dyn=%d)",
+                 (unsigned)(ACC_CAP + MIC_CHUNK + PLAY_BUF + TX_BUF + DYN_SZ),
                  (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
-                 !!s_acc, !!s_dec, !!s_tx_pcm, !!s_mic_json, !!s_play, !!s_tx);
+                 !!s_acc, !!s_tx_pcm, !!s_play, !!s_tx, !!s_dyn);
     }
-    assert(s_acc && s_dec && s_tx_pcm && s_mic_json && s_play && s_tx &&
-           s_ws_lock && s_dyn && s_hello);
+    assert(s_acc && s_tx_pcm && s_play && s_tx &&
+           s_ws_lock && s_dyn);
 
     ESP_LOGI(TAG, "psram after: free=%u largest=%u",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
