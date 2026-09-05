@@ -3,15 +3,18 @@
 ## Repository structure
 
 - `firmware/` is ESP-IDF 5.5.4 firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.8 V2.
-- `worker/src/index.js` owns authenticated `/session` and `/progress`, the signed ElevenLabs webhook, and the `SessionCounter` Durable Object.
+- `worker/src/index.js` owns authenticated `/session`, `/progress`, `/talk`, the signed ElevenLabs webhook, and the `SessionCounter` Durable Object.
+- `worker/src/talk.mjs` owns the prompt, the safety screen, and the topic tool; `worker/src/audio.mjs` owns turn detection and resampling. Both are pure and covered by Node built-in tests.
 - `worker/src/progress.mjs` owns normalized progress rules; keep its behavior covered by Node built-in tests in `worker/test/`.
-- `worker/scripts/configure_agent.sh` is the source of truth for agent audio, voice/model, turn behavior, client events, privacy, prompt, and guardrails.
+- `worker/scripts/configure_agent.sh` is the source of truth for the legacy ElevenLabs agent, kept live until the new firmware is verified on hardware.
+- Every reply is screened as text before it is synthesized. Never add a path that speaks model output without passing it through `screenReply`.
 - `docs/` is public user documentation. Keep commands generic and never add local absolute paths.
 
 ## Architecture and session flow
 
-- Short tap -> authenticated `GET /session` -> signed ElevenLabs WebSocket -> timed PCM upload -> queued playback -> explicit `agent_response_complete` -> short tap closes with code `1000`.
-- Post-call analysis -> signed transcription webhook -> normalized topic/date storage -> authenticated `/progress` -> NVS cache -> swipe-left curiosity map.
+- Short tap -> authenticated `GET /session?v=2` -> single-use ticket -> `wss` to our `/talk` -> binary PCM up -> Worker transcribes, answers, screens, synthesizes -> binary PCM down -> `{"t":"done"}` -> short tap closes with code `1000`.
+- `/session` without `v=2` still returns an ElevenLabs signed URL, so deploying the Worker cannot strand a board running older firmware. There is no OTA; recovery is a USB cable.
+- Topic ids reach storage only through the `note_topic` tool's enum, never as free text -> `/progress` -> NVS cache -> swipe-left curiosity map.
 - Host tests use `/session?progress=0` and must never alter the map.
 
 ## Commands
@@ -41,7 +44,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 
 - The map is a rolling, Sunday-aligned 84-day view. It shows distinct safe topic IDs per Jerusalem-local day, visually capped at four; it never shows scores, streaks, missed days, or mastery claims.
 - Only these IDs may cross the webhook boundary or enter storage: `space`, `jungle`, `detectives`, `oceans`, `dinosaurs`, `inventors`, `human_body`, `ancient_egypt`, `insects`, `weather`, `other`.
-- Never persist webhook transcripts, audio, summaries, rationales, or arbitrary child text. Store only normalized IDs, local dates, aggregate counts, revision, latest topic, and short-lived conversation-ID deduplication data.
+- Never persist audio, summaries, rationales, or arbitrary child text beyond the live session. Conversation history is session-scoped: it lives in the Durable Object so a reconnect does not lose the thread, and is dropped when the socket closes. Long-lived storage holds only normalized IDs, local dates, aggregate counts, revision, latest topic, and short-lived conversation-ID deduplication data.
 - Keep progress HTTP/NVS work outside LVGL and the audio pipeline. Failed or malformed refreshes leave the last valid cache intact.
 
 ## Audio invariants
@@ -73,6 +76,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 
 - Run the smallest relevant tests, then all Worker checks for Worker changes and a clean ESP-IDF build for firmware changes.
 - After a firmware build, require `git diff --exit-code -- firmware/dependencies.lock`.
-- For user-visible firmware changes, verify the real V2 device: tap, states, authenticated session, 16 kHz PCM, complete playback, `agent_response_complete`, and close code `1000`.
+- For user-visible firmware changes, verify the real V2 device: tap, states, authenticated session, 16 kHz PCM, complete playback, the `{"t":"done"}` frame, and close code `1000`.
+- A blank display is a panic until the monitor says otherwise, and the panel has no reset line: power-cycle over USB before concluding anything about a build.
 - Run the host conversation test only with a maintainer-supplied WAV and `progress=0`; run all four safety cases after agent changes.
 - Before publication, scan staged files for secrets, personal identifiers, live URLs, absolute paths, audio, generated folders, and caches.

@@ -52,7 +52,10 @@ void net_wifi_start(EventGroupHandle_t eg)
 esp_err_t net_get_signed_url(char *out, size_t cap, char *dyn, size_t dyn_cap)
 {
     esp_http_client_config_t cfg = {
-        .url = WORKER_URL "/session",
+        // v=2 asks for a ticketed socket to our own Worker. Without it the
+        // Worker answers with the old third-party URL, so a Worker deploy can
+        // never strand a board still running older firmware.
+        .url = WORKER_URL "/session?v=2",
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = 10000,
     };

@@ -1,10 +1,20 @@
-// Chiki Worker: authorize direct conversations and store normalized progress.
+// Chiki Worker: run the conversation, screen every reply before it is spoken,
+// and store deliberately tiny progress.
 import { DurableObject } from 'cloudflare:workers';
 import {
   progressEvent, progressSnapshot, recordProgress, verifyElevenLabsSignature,
 } from './progress.mjs';
 import { adventureFor } from './adventure.mjs';
 import { missingSessionSecrets, parseDailyCap } from './session.mjs';
+import { Resampler, TurnDetector, toInt16 } from './audio.mjs';
+import {
+  TEXT_MODEL, TTS_MODEL, appendTurn, screenReply, speechRequest, systemPrompt, turnRequest,
+} from './talk.mjs';
+import { bytesToBase64, generate, synthesize } from './gemini.mjs';
+
+const TICKET_TTL_MS = 60_000;      // a ticket is for one tap, taken once
+const SPEAK_FRAME = 8192;          // bytes per outbound audio frame, ~256ms
+const MAX_SESSION_MS = 300_000;    // mirrors the agent cap; idle time is money
 
 // KV can't do this: its read cache serves stale counts for ~60s, so a burst
 // blows straight past the cap. One DO instance = strongly consistent counter.
@@ -41,6 +51,129 @@ export class SessionCounter extends DurableObject {
     const result = recordProgress(previous, conversationId, timestamp, topics);
     if (!result.duplicate) await this.ctx.storage.put('progress', result.state);
     return { changed: result.changed, duplicate: result.duplicate, revision: result.state.revision || 0 };
+  }
+
+  // --- conversation ------------------------------------------------------
+
+  async mintTicket(adventure, progressEnabled, now) {
+    const ticket = crypto.randomUUID();
+    await this.ctx.storage.put(`t:${ticket}`,
+      { adventure, progressEnabled, expires: now + TICKET_TTL_MS });
+    return ticket;
+  }
+
+  /** Upgrade to a WebSocket and run one conversation. */
+  async fetch(request) {
+    const url = new URL(request.url);
+    const ticket = url.searchParams.get('t') || '';
+    const record = ticket ? await this.ctx.storage.get(`t:${ticket}`) : null;
+    // Single use: the ticket is spent whether or not it turns out to be valid.
+    if (ticket) await this.ctx.storage.delete(`t:${ticket}`);
+    if (!record || record.expires < Date.now()) {
+      return new Response('bad ticket', { status: 401 });
+    }
+    if (request.headers.get('Upgrade') !== 'websocket') {
+      return new Response('expected websocket', { status: 426 });
+    }
+
+    const pair = new WebSocketPair();
+    const [client, server] = Object.values(pair);
+    server.accept();
+    this.ctx.waitUntil(this.#converse(server, record.adventure,
+                                      record.progressEnabled !== false));
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async #converse(ws, adventure, progressEnabled) {
+    const env = this.env;
+    const child = {
+      name: env.CHILD_NAME || '', age: env.CHILD_AGE || '5',
+      form: env.CHILD_GRAMMATICAL_FORM || 'masculine',
+    };
+    const system = systemPrompt(child, adventure);
+    const detector = new TurnDetector();
+    const id = crypto.randomUUID();
+    // History lives only for this session and is never written to storage.
+    let history = [];
+    let odd = new Uint8Array(0);      // carried half-sample between frames
+    let busy = false;
+    const deadline = Date.now() + MAX_SESSION_MS;
+
+    const send = (obj) => { try { ws.send(JSON.stringify(obj)); } catch { /* closed */ } };
+    const bye = (why) => { send({ t: 'bye', why }); try { ws.close(1000, why); } catch { /* closed */ } };
+
+    ws.addEventListener('close', () => { detector.reset(); history = []; });
+    ws.addEventListener('error', () => { history = []; });
+
+    send({ t: 'ready', id });
+    await this.#say(ws, adventure.opening_line, { first: true });
+    history = appendTurn(history, 'agent', adventure.opening_line);
+
+    ws.addEventListener('message', async (event) => {
+      if (typeof event.data === 'string') return;       // device sends no control
+      if (Date.now() > deadline) return bye('time');
+      // While Chiki is answering, the device is not listening; ignore late frames
+      // rather than queueing a turn nobody is waiting for.
+      if (busy) return;
+
+      const joined = new Uint8Array(odd.length + event.data.byteLength);
+      joined.set(odd, 0);
+      joined.set(new Uint8Array(event.data), odd.length);
+      const usable = joined.length - (joined.length % 2);
+      odd = joined.subarray(usable);
+      if (detector.push(toInt16(joined.buffer.slice(0, usable))) !== 'end') return;
+
+      busy = true;
+      try {
+        const utterance = detector.take();
+        send({ t: 'thinking' });
+        const reply = await this.#answer(system, history, utterance);
+        history = appendTurn(history, 'child', '(audio)');
+        history = appendTurn(history, 'agent', reply.speak);
+        // Host tests pass progress=0 and must never touch the map.
+        if (reply.topic && progressEnabled) {
+          this.ctx.waitUntil(this.recordProgress(id, Date.now(), [reply.topic]));
+        }
+        await this.#say(ws, reply.speak, { blocked: reply.blocked });
+      } catch (e) {
+        console.log(`[chiki] turn failed: ${e} ${e.detail || ''}`);
+        bye('upstream');
+      } finally {
+        busy = false;
+      }
+    });
+  }
+
+  async #answer(system, history, utterance) {
+    const body = turnRequest({
+      system, history,
+      audio: bytesToBase64(new Uint8Array(utterance.buffer, 0, utterance.byteLength)),
+    });
+    const response = await generate(this.env.GEMINI_API_KEY, TEXT_MODEL, body);
+    const screened = screenReply(response);
+    if (screened.blocked) console.log(`[chiki] reply blocked: ${screened.reason}`);
+    return screened;
+  }
+
+  /** Synthesize, resample to the codec's 16 kHz, and stream it out. */
+  async #say(ws, text, { blocked = false, first = false } = {}) {
+    let audio;
+    try {
+      audio = await synthesize(this.env.GEMINI_API_KEY, TTS_MODEL, speechRequest(text));
+    } catch (e) {
+      console.log(`[chiki] tts failed: ${e} ${e.detail || ''}`);
+      try { ws.send(JSON.stringify({ t: 'done' })); } catch { /* closed */ }
+      return;
+    }
+    ws.send(JSON.stringify({ t: 'speaking', text, blocked, first }));
+
+    const resampler = new Resampler(audio.rate);
+    const pcm = resampler.push(new Int16Array(audio.pcm));
+    const bytes = new Uint8Array(pcm.buffer, 0, pcm.byteLength);
+    for (let i = 0; i < bytes.length; i += SPEAK_FRAME) {
+      try { ws.send(bytes.subarray(i, i + SPEAK_FRAME)); } catch { return; }
+    }
+    try { ws.send(JSON.stringify({ t: 'done' })); } catch { /* closed */ }
   }
 }
 
@@ -123,6 +256,14 @@ async function handle(request, env) {
       progress.conversationId, progress.timestampMs, progress.topics) }, 200);
   }
 
+  // The conversation socket. Authorization is the single-use ticket minted by
+  // /session, which the Durable Object validates and spends; the bearer token
+  // is not repeated here because a wss URL is all the device can carry.
+  if (url.pathname === '/talk') {
+    const counter = env.COUNTER.get(env.COUNTER.idFromName('device'));
+    return counter.fetch(request);
+  }
+
   if (request.method === 'GET' && url.pathname === '/progress') {
     if (!env.DEVICE_TOKEN) {
       console.log('[kidbot] DEVICE_TOKEN is missing');
@@ -156,20 +297,35 @@ async function handle(request, env) {
     const session = await counter.bump(day, cap, now);
     if (!session.allowed) return json({ error: 'daily cap' }, 429);
 
-    const su = await fetch(
-      `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(env.ELEVEN_AGENT_ID)}`,
-      { headers: { 'xi-api-key': env.ELEVENLABS_API_KEY } },
-    );
-    if (!su.ok) return upstreamFail('signed-url', su);
-    const signedUrl = (await su.json()).signed_url;
-    if (typeof signedUrl !== 'string' || !signedUrl) {
-      console.log('[kidbot] signed-url response missing signed_url');
-      return json({ error: 'upstream unavailable' }, 502);
-    }
     const adventure = adventureFor(
       now, session.previousSeen, session.used, session.latestTopic || session.lastTheme,
     );
     await counter.rememberTheme(adventure.weekly_theme_id);
+
+    // v2 devices talk to us; older firmware still expects an ElevenLabs signed
+    // URL. Both paths stay live until the new firmware is verified on hardware,
+    // because there is no OTA and a bad deploy means a cable and a rebuild.
+    let signedUrl;
+    if (url.searchParams.get('v') === '2') {
+      if (!env.GEMINI_API_KEY) {
+        console.log('[chiki] GEMINI_API_KEY is missing');
+        return json({ error: 'service unavailable' }, 503);
+      }
+      const ticket = await counter.mintTicket(
+        adventure, url.searchParams.get('progress') !== '0', now);
+      signedUrl = `wss://${url.host}/talk?t=${ticket}`;
+    } else {
+      const su = await fetch(
+        `https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(env.ELEVEN_AGENT_ID)}`,
+        { headers: { 'xi-api-key': env.ELEVENLABS_API_KEY } },
+      );
+      if (!su.ok) return upstreamFail('signed-url', su);
+      signedUrl = (await su.json()).signed_url;
+      if (typeof signedUrl !== 'string' || !signedUrl) {
+        console.log('[kidbot] signed-url response missing signed_url');
+        return json({ error: 'upstream unavailable' }, 502);
+      }
+    }
     return json({
       signed_url: signedUrl,
       dynamic_variables: {
