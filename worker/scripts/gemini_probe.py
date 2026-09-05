@@ -92,7 +92,12 @@ def list_models():
 def synthesize(text, model, out):
     """Hebrew voice check. Separate synthesis is what keeps a blocking safety
     screen possible: we hold the text, judge it, and only then speak."""
-    body = {"contents": [{"parts": [{"text": text}]}],
+    # The TTS models are still models: handed a bare question they try to answer
+    # it and the request fails. Chiki's lines are mostly questions, so the read-
+    # aloud instruction is required, not cosmetic.
+    body = {"contents": [{"parts": [
+                {"text": "Read the following aloud in Hebrew, exactly as "
+                         "written, and say nothing else:\n\n" + text}]}],
             "generationConfig": {"responseModalities": ["AUDIO"]}}
     resp = api(f"models/{model}:generateContent", body)
     try:
@@ -120,7 +125,7 @@ def usage_by_modality(meta, field):
     return out
 
 
-async def probe(wav, turns, model, system):
+async def probe(wav, turns, model, system, modality="TEXT"):
     """Replay one utterance N times and watch what each turn is billed.
 
     The point is the *shape* of the curve. If prompt tokens climb steeply with
@@ -135,7 +140,7 @@ async def probe(wav, turns, model, system):
         # TEXT out, not AUDIO: this is the shape that lets us screen a reply
         # before it is spoken, which Live cannot do otherwise (it has no
         # safetySettings support at all).
-        "generationConfig": {"responseModalities": ["TEXT"]},
+        "generationConfig": {"responseModalities": [modality]},
         "systemInstruction": {"parts": [{"text": system}]},
         "inputAudioTranscription": {},
     }}
@@ -146,9 +151,11 @@ async def probe(wav, turns, model, system):
             max_size=None) as ws:
         await ws.send(json.dumps(setup))
         raw = await ws.recv()
+        if isinstance(raw, bytes):          # some models frame as binary
+            raw = raw.decode()
         if "setupComplete" not in raw:
             sys.exit(f"setup rejected: {raw[:400]}")
-        print(f"connected: {model}, audio in / text out\n")
+        print(f"connected: {model}, audio in / {modality.lower()} out\n")
 
         for turn in range(1, turns + 1):
             for i in range(0, len(pcm), CHUNK):
@@ -172,12 +179,13 @@ async def probe(wav, turns, model, system):
             print(f"turn {turn:>2}: prompt={rows[-1][1]:>7,}  "
                   f"response={rows[-1][2]:>5,}  {reply[:60]}")
 
-    report(rows, len(pcm))
+    report(rows, len(pcm), modality)
 
 
-def report(rows, pcm_bytes):
+def report(rows, pcm_bytes, modality="TEXT"):
     if not rows:
         return
+    out_key = "audio_out" if modality == "AUDIO" else "text_out"
     audio_s = pcm_bytes / 2 / 16000
     total = 0.0
     print(f"\nutterance {audio_s:.1f}s; each turn re-bills whatever context "
@@ -186,7 +194,7 @@ def report(rows, pcm_bytes):
           f"{'cumulative':>11}")
     for i, (turn, prompt, resp, _) in enumerate(rows):
         # prompt tokens are dominated by accumulated audio; price them as audio
-        usd = prompt * PRICE["audio_in"] / 1e6 + resp * PRICE["text_out"] / 1e6
+        usd = (prompt * PRICE["audio_in"] + resp * PRICE[out_key]) / 1e6
         total += usd
         delta = prompt - rows[i - 1][1] if i else prompt
         print(f"{turn:>4} {prompt:>11,} {delta:>+10,} {usd:>10.5f} {total:>11.5f}")
@@ -209,7 +217,8 @@ def main():
     p.add_argument("--list-models", action="store_true")
     p.add_argument("--probe", metavar="WAV", help="16 kHz mono WAV to replay")
     p.add_argument("--turns", type=int, default=12)
-    p.add_argument("--model", default="gemini-2.5-flash-native-audio-preview-12-2025")
+    p.add_argument("--modality", default="TEXT", choices=["TEXT", "AUDIO"])
+    p.add_argument("--model", default="gemini-2.5-flash-native-audio-latest")
     p.add_argument("--tts", metavar="TEXT", help="synthesize Hebrew and save it")
     p.add_argument("--tts-model", default="gemini-2.5-flash-preview-tts")
     p.add_argument("--out", default="voice.wav")
@@ -222,7 +231,8 @@ def main():
     elif args.tts:
         synthesize(args.tts, args.tts_model, args.out)
     elif args.probe:
-        asyncio.run(probe(Path(args.probe), args.turns, args.model, args.system))
+        asyncio.run(probe(Path(args.probe), args.turns, args.model, args.system,
+                          args.modality))
     else:
         p.print_help()
 
