@@ -126,8 +126,12 @@ BODY=$(jq -n \
       asr: {quality:"high", provider:"scribe_realtime", user_input_audio_format:"pcm_16000", keywords:[]},
       tts: {model_id:"eleven_v3_conversational", voice_id:$voice_id,
             agent_output_audio_format:"pcm_16000", optimize_streaming_latency:3},
+      # Billing is wall-clock seconds of open socket, so idle time is pure cost.
+      # 20s, not 60: a child who has said nothing for 20 seconds has left the
+      # room. turn_timeout stays at 15 deliberately - lowering it makes the
+      # agent nudge sooner and more often, which bills *more* speech.
       turn: {
-        turn_timeout:15, silence_end_call_timeout:60, mode:"turn", turn_eagerness:"normal",
+        turn_timeout:15, silence_end_call_timeout:20, mode:"turn", turn_eagerness:"normal",
         speculative_turn:true, turn_model:"turn_v3",
         soft_timeout_config: {
           timeout_seconds:2.5, message:"הממם... רגע, אני חושב...",
@@ -136,7 +140,12 @@ BODY=$(jq -n \
           max_soft_timeouts_per_generation:3, disable_until_first_user_message:false
         }
       },
-      conversation: {client_events:["audio","ping","user_transcript","agent_response","agent_response_complete"]},
+      # Unset defaults to 600s upstream. Two runaway sessions once cost 23% of
+      # four days of spend, so bound the worst case explicitly.
+      conversation: {
+        max_duration_seconds:300,
+        client_events:["audio","ping","user_transcript","agent_response","agent_response_complete"]
+      },
       agent: {
         language:"he", first_message:$first_message,
         prompt:{prompt:$prompt, llm:"gpt-5.6-luna"},
@@ -226,6 +235,8 @@ printf '%s' "$LIVE" | jq -e \
   .conversation_config.tts.model_id == "eleven_v3_conversational" and
   .conversation_config.tts.voice_id == $voice_id and
   .conversation_config.turn.turn_timeout == 15 and
+  .conversation_config.turn.silence_end_call_timeout == 20 and
+  .conversation_config.conversation.max_duration_seconds == 300 and
   .conversation_config.turn.turn_eagerness == "normal" and
   .conversation_config.turn.soft_timeout_config.timeout_seconds == 2.5 and
   .conversation_config.conversation.client_events ==
