@@ -2,6 +2,8 @@
 ELEVENLABS_API_KEY=
 ELEVEN_AGENT_ID=
 ELEVEN_VOICE_ID=
+# Google AI Studio key, for the Gemini migration probe only.
+GEMINI_API_KEY=
 DEVICE_TOKEN=
 WORKER_URL=https://your-worker.example.workers.dev
 CHILD_NAME=
