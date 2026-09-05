@@ -5,7 +5,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "vars": {
-    "SESSION_DAILY_CAP": "20"
+    "SESSION_DAILY_CAP": "50"
   },
   "durable_objects": {
     "bindings": [{ "name": "COUNTER", "class_name": "SessionCounter" }]
