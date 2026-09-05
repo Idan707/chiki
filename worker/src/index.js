@@ -8,7 +8,8 @@ import { adventureFor } from './adventure.mjs';
 import { missingSessionSecrets, parseDailyCap } from './session.mjs';
 import { Resampler, TurnDetector, toInt16 } from './audio.mjs';
 import {
-  TEXT_MODEL, TTS_MODEL, appendTurn, screenReply, speechRequest, systemPrompt, turnRequest,
+  TEXT_MODEL, TTS_MODEL, appendTurn, readTopic, screenReply, speechRequest,
+  splitForSpeech, systemPrompt, topicRequest, turnRequest,
 } from './talk.mjs';
 import { bytesToBase64, generate, synthesize } from './gemini.mjs';
 
@@ -79,6 +80,10 @@ export class SessionCounter extends DurableObject {
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     server.accept();
+    // Without this the runtime hands binary frames over as Blob, whose
+    // byteLength is undefined - every frame silently becomes an empty buffer
+    // and the child is never heard.
+    server.binaryType = 'arraybuffer';
     this.ctx.waitUntil(this.#converse(server, record.adventure,
                                       record.progressEnabled !== false));
     return new Response(null, { status: 101, webSocket: client });
@@ -96,7 +101,7 @@ export class SessionCounter extends DurableObject {
     // History lives only for this session and is never written to storage.
     let history = [];
     let odd = new Uint8Array(0);      // carried half-sample between frames
-    let busy = false;
+    let busy = true;      // ignore device audio until the greeting is done
     const deadline = Date.now() + MAX_SESSION_MS;
 
     const send = (obj) => { try { ws.send(JSON.stringify(obj)); } catch { /* closed */ } };
@@ -105,16 +110,19 @@ export class SessionCounter extends DurableObject {
     ws.addEventListener('close', () => { detector.reset(); history = []; });
     ws.addEventListener('error', () => { history = []; });
 
-    send({ t: 'ready', id });
-    await this.#say(ws, adventure.opening_line, { first: true });
-    history = appendTurn(history, 'agent', adventure.opening_line);
-
+    // Attach before the first await. Frames that arrive while the socket has no
+    // message listener are dropped, and synthesizing the greeting takes seconds
+    // - long enough to silently swallow the child's first words.
     ws.addEventListener('message', async (event) => {
       if (typeof event.data === 'string') return;       // device sends no control
       if (Date.now() > deadline) return bye('time');
       // While Chiki is answering, the device is not listening; ignore late frames
       // rather than queueing a turn nobody is waiting for.
       if (busy) return;
+      if (!(event.data instanceof ArrayBuffer)) {
+        console.log(`[chiki] unexpected frame type ${event.data?.constructor?.name}`);
+        return;
+      }
 
       const joined = new Uint8Array(odd.length + event.data.byteLength);
       joined.set(odd, 0);
@@ -130,11 +138,12 @@ export class SessionCounter extends DurableObject {
         const reply = await this.#answer(system, history, utterance);
         history = appendTurn(history, 'child', '(audio)');
         history = appendTurn(history, 'agent', reply.speak);
-        // Host tests pass progress=0 and must never touch the map.
-        if (reply.topic && progressEnabled) {
-          this.ctx.waitUntil(this.recordProgress(id, Date.now(), [reply.topic]));
-        }
         await this.#say(ws, reply.speak, { blocked: reply.blocked });
+        // Host tests pass progress=0 and must never touch the map. This runs
+        // after the child has been answered, so it costs them nothing.
+        if (progressEnabled && !reply.blocked) {
+          this.ctx.waitUntil(this.#noteTopic(id, history));
+        }
       } catch (e) {
         console.log(`[chiki] turn failed: ${e} ${e.detail || ''}`);
         bye('upstream');
@@ -142,36 +151,63 @@ export class SessionCounter extends DurableObject {
         busy = false;
       }
     });
+
+    send({ t: 'ready', id });
+    await this.#say(ws, adventure.opening_line, { first: true });
+    history = appendTurn(history, 'agent', adventure.opening_line);
+    busy = false;                          // the child has the floor now
+  }
+
+  /** Second call, off the reply path: an enum id or nothing. */
+  async #noteTopic(id, history) {
+    try {
+      const res = await generate(this.env.GEMINI_API_KEY, TEXT_MODEL, topicRequest(history));
+      const topic = readTopic(res);
+      if (topic) await this.recordProgress(id, Date.now(), [topic]);
+    } catch (e) {
+      console.log(`[chiki] topic extraction failed: ${e}`);
+    }
   }
 
   async #answer(system, history, utterance) {
+    const t0 = Date.now();
     const body = turnRequest({
       system, history,
       audio: bytesToBase64(new Uint8Array(utterance.buffer, 0, utterance.byteLength)),
     });
     const response = await generate(this.env.GEMINI_API_KEY, TEXT_MODEL, body);
+    console.log(`[chiki] answer ${Date.now() - t0}ms finish=${response?.candidates?.[0]?.finishReason}`
+      + ` thoughts=${response?.usageMetadata?.thoughtsTokenCount || 0}`);
     const screened = screenReply(response);
     if (screened.blocked) console.log(`[chiki] reply blocked: ${screened.reason}`);
     return screened;
   }
 
-  /** Synthesize, resample to the codec's 16 kHz, and stream it out. */
+  /**
+   * Synthesize, resample to the codec's 16 kHz, and stream it out.
+   *
+   * Synthesis is the slowest stage and scales with length, so the opening
+   * sentence is synthesized and sent on its own while the rest is still being
+   * generated. The child hears Chiki start talking seconds sooner.
+   */
   async #say(ws, text, { blocked = false, first = false } = {}) {
-    let audio;
-    try {
-      audio = await synthesize(this.env.GEMINI_API_KEY, TTS_MODEL, speechRequest(text));
-    } catch (e) {
-      console.log(`[chiki] tts failed: ${e} ${e.detail || ''}`);
-      try { ws.send(JSON.stringify({ t: 'done' })); } catch { /* closed */ }
-      return;
-    }
+    const chunks = splitForSpeech(text);
     ws.send(JSON.stringify({ t: 'speaking', text, blocked, first }));
-
-    const resampler = new Resampler(audio.rate);
-    const pcm = resampler.push(new Int16Array(audio.pcm));
-    const bytes = new Uint8Array(pcm.buffer, 0, pcm.byteLength);
-    for (let i = 0; i < bytes.length; i += SPEAK_FRAME) {
-      try { ws.send(bytes.subarray(i, i + SPEAK_FRAME)); } catch { return; }
+    for (const chunk of chunks) {
+      const t0 = Date.now();
+      let audio;
+      try {
+        audio = await synthesize(this.env.GEMINI_API_KEY, TTS_MODEL, speechRequest(chunk));
+      } catch (e) {
+        console.log(`[chiki] tts failed: ${e} ${e.detail || ''}`);
+        break;
+      }
+      console.log(`[chiki] tts ${Date.now() - t0}ms for ${chunk.length} chars`);
+      const pcm = new Resampler(audio.rate).push(new Int16Array(audio.pcm));
+      const bytes = new Uint8Array(pcm.buffer, 0, pcm.byteLength);
+      for (let i = 0; i < bytes.length; i += SPEAK_FRAME) {
+        try { ws.send(bytes.subarray(i, i + SPEAK_FRAME)); } catch { return; }
+      }
     }
     try { ws.send(JSON.stringify({ t: 'done' })); } catch { /* closed */ }
   }
