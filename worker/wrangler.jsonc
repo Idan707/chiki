@@ -3,7 +3,8 @@
   "main": "src/index.js",
   "compatibility_date": "2026-08-20",
   "compatibility_flags": ["nodejs_compat"],
-  "observability": { "enabled": true },
+  "send_metrics": false,
+  "observability": { "enabled": true, "redact_query_string": true },
   "vars": {
     "SESSION_DAILY_CAP": "20"
   },
