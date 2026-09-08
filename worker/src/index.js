@@ -6,12 +6,13 @@ import {
 } from './progress.mjs';
 import { adventureFor } from './adventure.mjs';
 import { missingSessionSecrets, parseDailyCap } from './session.mjs';
-import { Resampler, TurnDetector, toInt16 } from './audio.mjs';
+import { TurnDetector, toInt16 } from './audio.mjs';
 import {
-  RETRY_LINE, TEXT_MODEL, TTS_MODEL, appendTurn, readTopic, screenReply, speechRequest,
-  splitForSpeech, systemPrompt, topicRequest, turnRequest,
+  RETRY_LINE, TEXT_MODEL, appendTurn, readTopic, screenReply, splitForSpeech,
+  systemPrompt, topicRequest, turnRequest,
 } from './talk.mjs';
-import { bytesToBase64, generate, synthesize } from './gemini.mjs';
+import { bytesToBase64, generate } from './gemini.mjs';
+import { speak } from './gcp.mjs';
 
 const TICKET_TTL_MS = 60_000;      // a ticket is for one tap, taken once
 const SPEAK_FRAME = 8192;          // bytes per outbound audio frame, ~256ms
@@ -186,26 +187,26 @@ export class SessionCounter extends DurableObject {
   }
 
   /**
-   * Synthesize, resample to the codec's 16 kHz, and stream it out.
+   * Synthesize and stream out. Chirp3-HD answers at 16 kHz, the rate the codec
+   * runs at, so nothing is resampled. It is also 4-5x faster than the previous
+   * path, which is what makes a reply land in seconds rather than most of ten.
    *
-   * Synthesis is the slowest stage and scales with length, so the opening
-   * sentence is synthesized and sent on its own while the rest is still being
-   * generated. The child hears Chiki start talking seconds sooner.
+   * The opening sentence is still synthesized on its own: even at this speed it
+   * gets sound to the child sooner on a long answer.
    */
   async #say(ws, text, { blocked = false, first = false } = {}) {
     const chunks = splitForSpeech(text);
     ws.send(JSON.stringify({ t: 'speaking', text, blocked, first }));
     for (const chunk of chunks) {
       const t0 = Date.now();
-      let audio;
+      let pcm;
       try {
-        audio = await synthesize(this.env.GEMINI_API_KEY, TTS_MODEL, speechRequest(chunk));
+        pcm = await speak(this.env.GCP_SERVICE_ACCOUNT, chunk, this.env.CHIKI_VOICE);
       } catch (e) {
         console.log(`[chiki] tts failed: ${e} ${e.detail || ''}`);
         break;
       }
       console.log(`[chiki] tts ${Date.now() - t0}ms for ${chunk.length} chars`);
-      const pcm = new Resampler(audio.rate).push(new Int16Array(audio.pcm));
       const bytes = new Uint8Array(pcm.buffer, 0, pcm.byteLength);
       for (let i = 0; i < bytes.length; i += SPEAK_FRAME) {
         try { ws.send(bytes.subarray(i, i + SPEAK_FRAME)); } catch { return; }

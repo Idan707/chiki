@@ -12,3 +12,10 @@ firmware/main/wifi_creds.h
 firmware/managed_components/
 firmware/sdkconfig
 firmware/sdkconfig.old
+
+# Google Cloud service account keys: these contain a private key.
+# The downloaded filename is <project>-<hash>.json, which matches nothing
+# else here, but the broader patterns catch a renamed copy too.
+gen-lang-client-*.json
+*service*account*.json
+*-key.json

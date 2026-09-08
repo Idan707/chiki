@@ -11,7 +11,6 @@ import { TOPIC_IDS } from './progress.mjs';
 export const LIVE_MODEL = 'gemini-2.5-flash-native-audio-latest';
 // gemini-2.5-flash is closed to new users; the API names this as its successor.
 export const TEXT_MODEL = 'gemini-3.6-flash';
-export const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 
 // Gemini blocks core child-safety harms unconditionally; these are the
 // adjustable categories, set as strictly as the API allows.
@@ -137,7 +136,7 @@ export function turnRequest({ system, history, audio, mimeType = 'audio/pcm;rate
       // budget has to clear it with room for the answer.
       maxOutputTokens: 1200,
       thinkingConfig: { thinkingLevel: 'low' },
-      stopSequences: ['The user', 'The child'],
+      stopSequences: ['The user', 'The child', 'Wait,', 'Let me', 'I should'],
     },
   };
 }
@@ -173,7 +172,41 @@ export function screenReply(response) {
   if (!text) {
     return { speak: SAFE_LINE, topic, blocked: true, reason: 'no-text' };
   }
-  return { speak: capForSpeech(stripForSpeech(text)), topic, blocked: false, reason: '' };
+  const speak = capForSpeech(hebrewOnly(stripForSpeech(text)));
+  if (!speak) return { speak: SAFE_LINE, topic, blocked: true, reason: 'no-hebrew' };
+  return { speak, topic, blocked: false, reason: '' };
+}
+
+/**
+ * Chiki speaks Hebrew and nothing else, so Latin script is always the model
+ * talking to itself: "Wait, let me retry in strict short Hebrew" reached the
+ * speaker once, and it glosses Hebrew nouns in English - "עננים (clouds)" -
+ * constantly. Remove the Latin rather than truncating there: cutting at the
+ * first gloss threw away most of every reply. Stop sequences are too brittle
+ * to rely on alone.
+ */
+export function hebrewOnly(text) {
+  // A parenthetical gloss is an aside: drop it and keep the sentence around it.
+  let out = text.replace(/\([^)]*[A-Za-z][^)]*\)/g, ' ');
+
+  // A Latin *sentence* is the model abandoning its draft ("Wait, let me retry
+  // in strict short Hebrew"). Everything before it is a false start, so keep
+  // only what it wrote afterwards - concatenating both halves made Chiki say
+  // the same clause twice.
+  const restart = /[A-Za-z][A-Za-z'\u2019-]*(?:\s+[A-Za-z][A-Za-z'\u2019-]*){2,}/g;
+  const parts = out.split(restart).filter((x) => /[\u0590-\u05FF]/.test(x));
+  if (parts.length) out = parts[parts.length - 1];
+
+  return out
+    .replace(/[A-Za-z][A-Za-z'\u2019-]*/g, ' ')        // stray Latin words
+    .replace(/(^|\s)[.,!?:;\u2026-]+(?=\s|$)/g, ' ')  // punctuation left stranded
+    .replace(/\s+([.,!?:;\u2026])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s.,!?:;\u2026-]+/, '')
+    .trim()
+    // a stranded single letter is where the Hebrew was cut mid-word
+    .replace(/\s+\S$/u, '')
+    .trim();
 }
 
 /** Everything here is read aloud, so markup and emoji are noise at best. */
@@ -187,26 +220,13 @@ export function stripForSpeech(text) {
     .trim();
 }
 
-/** TTS models answer a bare question instead of reading it; instruct explicitly. */
-export function speechRequest(text) {
-  return {
-    contents: [{
-      parts: [{
-        text: 'Read the following aloud in Hebrew, exactly as written, warmly, '
-          + 'as if speaking to a small child. Say nothing else:\n\n' + text,
-      }],
-    }],
-    generationConfig: { responseModalities: ['AUDIO'] },
-  };
-}
-
 /**
  * Hard ceiling on what gets spoken. Synthesis is the slowest stage and a model
  * that ignores "two or three short sentences" once produced 988 characters,
  * which is 23 seconds of audio a five-year-old will not sit through. Cut at a
  * sentence end so the reply still lands as a whole thought.
  */
-export function capForSpeech(text, maxChars = 220) {
+export function capForSpeech(text, maxChars = 180) {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
   const window = trimmed.slice(0, maxChars);

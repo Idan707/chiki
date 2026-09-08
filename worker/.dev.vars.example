@@ -4,6 +4,10 @@ ELEVEN_AGENT_ID=
 ELEVEN_VOICE_ID=
 # Google AI Studio key, for the Gemini migration probe only.
 GEMINI_API_KEY=
+# Path is not used at runtime: upload the service account JSON as a Worker
+# secret with `wrangler secret put GCP_SERVICE_ACCOUNT < key.json`.
+# Optional voice override, e.g. he-IL-Chirp3-HD-Aoede.
+CHIKI_VOICE=
 DEVICE_TOKEN=
 WORKER_URL=https://your-worker.example.workers.dev
 CHILD_NAME=

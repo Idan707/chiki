@@ -4,7 +4,7 @@
 
 - `firmware/` is ESP-IDF 5.5.4 firmware for the Waveshare ESP32-S3-Touch-AMOLED-1.8 V2.
 - `worker/src/index.js` owns authenticated `/session`, `/progress`, `/talk`, the signed ElevenLabs webhook, and the `SessionCounter` Durable Object.
-- `worker/src/talk.mjs` owns the prompt, the safety screen, and the topic tool; `worker/src/audio.mjs` owns turn detection and resampling. Both are pure and covered by Node built-in tests.
+- `worker/src/talk.mjs` owns the prompt, the safety screen, and the Hebrew-only filter; `worker/src/gcp.mjs` owns service-account auth and Chirp3-HD synthesis; `worker/src/audio.mjs` owns turn detection and resampling. Both are pure and covered by Node built-in tests.
 - `worker/src/progress.mjs` owns normalized progress rules; keep its behavior covered by Node built-in tests in `worker/test/`.
 - `worker/scripts/configure_agent.sh` is the source of truth for the legacy ElevenLabs agent, kept live until the new firmware is verified on hardware.
 - Every reply is screened as text before it is synthesized. Never add a path that speaks model output without passing it through `screenReply`.
@@ -49,7 +49,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 
 ## Audio invariants
 
-- PCM is always 16 kHz, signed 16-bit, mono in both directions. The Worker resamples synthesis down to 16 kHz so the device never sees another rate.
+- PCM is always 16 kHz, signed 16-bit, mono in both directions. Chirp3-HD is asked for 16 kHz LINEAR16 directly, so nothing is resampled.
 - Audio travels as raw PCM in binary frames; control messages are `{"t": ...}` text frames under 4 KB. Do not reintroduce base64-in-JSON audio.
 - Keep half duplex: upload microphone PCM only while listening, and upload nothing while buffering, playing, or flushing. The old equal-duration zero PCM existed to keep a third-party timeline aligned; our Worker owns turn detection, so silence on the wire is silence.
 - Playback ends only after the `{"t":"done"}` frame and an empty playback queue. Packet gaps are not response boundaries.
@@ -68,6 +68,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 ## Generated files and secrets
 
 - Keep Worker secrets only in `worker/.dev.vars` or Cloudflare secrets. Never print or commit them.
+- A Google service account JSON contains a private key. `.gitignore` covers the downloaded `<project>-<hash>.json` name; upload it with `wrangler secret put GCP_SERVICE_ACCOUNT` and never commit a copy.
 - Copy `firmware/main/wifi_creds.h.example` to ignored `firmware/main/wifi_creds.h`. Never commit the real file.
 - Commit `firmware/dependencies.lock` for reproducible board builds, but regenerate it through ESP-IDF rather than editing it by hand.
 - Do not edit or commit `firmware/build/`, `firmware/managed_components/`, generated `firmware/sdkconfig*`, `worker/.wrangler/`, `node_modules/`, caches, or audio fixtures.

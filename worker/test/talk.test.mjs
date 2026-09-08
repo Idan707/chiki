@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   SAFE_LINE, SAFETY_SETTINGS, TOPIC_ENUM, appendTurn, screenReply,
-  capForSpeech, readTopic, speechRequest, splitForSpeech, stripForSpeech, systemPrompt,
+  capForSpeech, hebrewOnly, readTopic, splitForSpeech, stripForSpeech, systemPrompt,
   topicRequest, turnRequest,
 } from '../src/talk.mjs';
 import { TOPIC_IDS } from '../src/progress.mjs';
@@ -120,8 +120,51 @@ test('a long reply is split so the first sentence can be spoken sooner', () => {
 test('an over-long reply is capped at a sentence end', () => {
   const long = ('עננים הם טיפות מים קטנטנות שעולות לשמיים. ').repeat(12);
   const capped = capForSpeech(long);
-  assert.ok(capped.length <= 220);
+  assert.ok(capped.length <= 180);
   assert.ok(capped.endsWith('.'));
+});
+
+// "עננים עשויים מטיפות מ Wait, let me retry in strict short Hebrew" was spoken
+// aloud to a child. Chiki speaks Hebrew only, so Latin script is always a leak.
+test('reasoning that leaks in English never reaches the speaker', () => {
+  const leaked = 'עננים עשויים מטיפות מים. Wait, let me retry in strict Hebrew.';
+  assert.equal(hebrewOnly(leaked), 'עננים עשויים מטיפות מים.');
+  assert.ok(!screenReply(ok(leaked)).speak.match(/[A-Za-z]{3,}/));
+});
+
+// Cutting at the first gloss threw away most of every reply: the model writes
+// "עננים (clouds)" constantly, so the Latin is removed and the Hebrew kept.
+test('an English gloss is removed without losing the rest of the sentence', () => {
+  assert.equal(hebrewOnly('עננים (clouds) הם טיפות מים קטנות.'),
+    'עננים הם טיפות מים קטנות.');
+});
+
+// The model writes a false start, says "let me retry" in English, then rewrites.
+// Keeping both halves made Chiki say the same clause twice out loud.
+test('a restart keeps only what the model wrote after it', () => {
+  assert.equal(
+    hebrewOnly('עננים עשויים המון Wait, let me retry in Hebrew. עננים הם טיפות מים.'),
+    'עננים הם טיפות מים.');
+});
+
+test('a letter stranded by a mid-word cut is dropped', () => {
+  assert.equal(hebrewOnly('עננים עשויים מטיפות מ Wait let me retry'),
+    'עננים עשויים מטיפות');
+});
+
+test('a reply with no Hebrew left is empty, so the safe line is spoken', () => {
+  assert.equal(hebrewOnly('Let me think about how to phrase this.'), '');
+});
+
+test('pure Hebrew is left alone', () => {
+  const clean = 'עננים הם טיפות מים קטנטנות. מה אתה רואה?';
+  assert.equal(hebrewOnly(clean), clean);
+});
+
+test('a reply that is nothing but leaked reasoning speaks the safe line', () => {
+  const r = screenReply(ok('Let me think about how to answer this in Hebrew.'));
+  assert.equal(r.blocked, true);
+  assert.equal(r.speak, SAFE_LINE);
 });
 
 test('a reply within the cap is untouched', () => {
@@ -130,7 +173,7 @@ test('a reply within the cap is untouched', () => {
 
 test('screening applies the cap', () => {
   const long = ('עננים הם טיפות מים קטנטנות שעולות לשמיים. ').repeat(12);
-  assert.ok(screenReply(ok(long)).speak.length <= 220);
+  assert.ok(screenReply(ok(long)).speak.length <= 180);
 });
 
 test('a short reply is not split', () => {
@@ -150,13 +193,4 @@ test('history is capped so a long session cannot grow without bound', () => {
   for (let i = 0; i < 40; i++) history = appendTurn(history, 'child', `t${i}`, 20);
   assert.equal(history.length, 20);
   assert.equal(history.at(-1).text, 't39');
-});
-
-// The TTS model answers a bare question instead of reading it, and Chiki's
-// lines are mostly questions.
-test('speech requests instruct the model to read, not answer', () => {
-  const body = speechRequest('למה יש עננים?');
-  assert.ok(body.contents[0].parts[0].text.startsWith('Read the following aloud'));
-  assert.ok(body.contents[0].parts[0].text.includes('למה יש עננים?'));
-  assert.deepEqual(body.generationConfig.responseModalities, ['AUDIO']);
 });
