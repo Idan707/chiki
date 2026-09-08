@@ -85,6 +85,15 @@ static void on_audio(const uint8_t *pcm, size_t len)
     xEventGroupSetBits(s_eg, BIT_AGENT_AUDIO);
 }
 
+// An absent field yields NULL, and NULL through a %s panics with
+// LoadProhibited inside vfprintf. The Worker legitimately omits `text` on a
+// thinking frame, which crashed the board on the first real conversation.
+static const char *field(const cJSON *root, const char *key, const char *fallback)
+{
+    const char *value = cJSON_GetStringValue(cJSON_GetObjectItem(root, key));
+    return value ? value : fallback;
+}
+
 // Control: small text frames from our own Worker. The Worker owns turn
 // detection, the safety screen and synthesis, so the device only reacts.
 static void on_control(char *msg, size_t len)
@@ -103,20 +112,16 @@ static void on_control(char *msg, size_t len)
         return;
     }
     if (!strcmp(type, "ready")) {
-        ESP_LOGI(TAG, "session up id=%s", cJSON_GetStringValue(
-            cJSON_GetObjectItem(root, "id")));
+        ESP_LOGI(TAG, "session up id=%s", field(root, "id", "?"));
     } else if (!strcmp(type, "thinking")) {
         face_set_state(FACE_THINKING);      // kid's turn ended, worker working
-        ESP_LOGI(TAG, "heard: %s", cJSON_GetStringValue(
-            cJSON_GetObjectItem(root, "text")));
+        ESP_LOGI(TAG, "heard: %s", field(root, "text", "(audio)"));
     } else if (!strcmp(type, "speaking")) {
-        ESP_LOGI(TAG, "agent: %s", cJSON_GetStringValue(
-            cJSON_GetObjectItem(root, "text")));
+        ESP_LOGI(TAG, "agent: %s", field(root, "text", ""));
     } else if (!strcmp(type, "done")) {
         xEventGroupSetBits(s_eg, BIT_AGENT_DONE);
     } else if (!strcmp(type, "bye")) {
-        ESP_LOGI(TAG, "worker ended the session: %s", cJSON_GetStringValue(
-            cJSON_GetObjectItem(root, "why")));
+        ESP_LOGI(TAG, "worker ended the session: %s", field(root, "why", "?"));
         s_end_req = true;
     }
     cJSON_Delete(root);
