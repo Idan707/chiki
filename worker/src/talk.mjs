@@ -27,6 +27,10 @@ export const SAFETY_SETTINGS = [
 export const SAFE_LINE =
   'על זה אני לא יכול לעזור, אבל אפשר לדבר על משהו בטוח וכיפי. על מה בא לך?';
 
+// Spoken when the upstream is slow or unreachable. A five-year-old reads
+// silence as a broken toy, so say something ordinary and stay in the session.
+export const RETRY_LINE = 'הממ, לא שמעתי טוב. אפשר להגיד לי שוב?';
+
 // Only these may cross into storage, per the curiosity-map invariants.
 export const TOPIC_ENUM = [...TOPIC_IDS];
 
@@ -216,11 +220,14 @@ export function capForSpeech(text, maxChars = 220) {
  * with length and is the slowest stage by far, so synthesizing the first
  * sentence alone gets sound to the child seconds sooner.
  */
-export function splitForSpeech(text, target = 45) {
+export function splitForSpeech(text, target = 25) {
   const trimmed = text.trim();
   if (trimmed.length <= target * 1.6) return [trimmed];
 
-  const boundary = /[.!?\u2026]|\s\u2014\s/g;
+  // Commas count: synthesis latency is ~1.1s + 0.065s per character, so a
+  // 25-character opener reaches the child about three seconds sooner than a
+  // 65-character one. Chiki's replies usually open with a short exclamation.
+  const boundary = /[.!?\u2026,]|\s\u2014\s/g;
   const cuts = [];
   for (let m = boundary.exec(trimmed); m; m = boundary.exec(trimmed)) {
     const at = m.index + m[0].length;

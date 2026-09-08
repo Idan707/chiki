@@ -8,7 +8,7 @@ import { adventureFor } from './adventure.mjs';
 import { missingSessionSecrets, parseDailyCap } from './session.mjs';
 import { Resampler, TurnDetector, toInt16 } from './audio.mjs';
 import {
-  TEXT_MODEL, TTS_MODEL, appendTurn, readTopic, screenReply, speechRequest,
+  RETRY_LINE, TEXT_MODEL, TTS_MODEL, appendTurn, readTopic, screenReply, speechRequest,
   splitForSpeech, systemPrompt, topicRequest, turnRequest,
 } from './talk.mjs';
 import { bytesToBase64, generate, synthesize } from './gemini.mjs';
@@ -146,7 +146,9 @@ export class SessionCounter extends DurableObject {
         }
       } catch (e) {
         console.log(`[chiki] turn failed: ${e} ${e.detail || ''}`);
-        bye('upstream');
+        // Recoverable: say something ordinary and keep the floor open rather
+        // than hanging up on a child who did nothing wrong.
+        await this.#say(ws, RETRY_LINE, { blocked: false });
       } finally {
         busy = false;
       }

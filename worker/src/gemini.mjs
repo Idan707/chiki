@@ -6,12 +6,27 @@
 
 const HOST = 'https://generativelanguage.googleapis.com/v1beta';
 
-async function call(key, model, method, body) {
-  const res = await fetch(`${HOST}/models/${model}:${method}`, {
-    method: 'POST',
-    headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+// Upstream can stop answering entirely rather than returning an error - a
+// direct call was observed hanging 99s with no bytes. Without a deadline the
+// socket hangs with it and the child is left staring at a silent toy.
+export const ANSWER_TIMEOUT_MS = 15_000;
+export const SPEECH_TIMEOUT_MS = 25_000;
+
+async function call(key, model, method, body, timeoutMs) {
+  let res;
+  try {
+    res = await fetch(`${HOST}/models/${model}:${method}`, {
+      method: 'POST',
+      headers: { 'x-goog-api-key': key, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (e) {
+    const err = new Error(`gemini ${method} unreachable`);
+    err.detail = String(e);
+    err.timeout = true;
+    throw err;
+  }
   if (!res.ok) {
     // Detail goes to the server log only; callers surface something generic.
     const detail = (await res.text().catch(() => '')).slice(0, 300);
@@ -24,8 +39,8 @@ async function call(key, model, method, body) {
 }
 
 /** One conversational turn: audio in, text (and maybe a tool call) out. */
-export function generate(key, model, body) {
-  return call(key, model, 'generateContent', body);
+export function generate(key, model, body, timeoutMs = ANSWER_TIMEOUT_MS) {
+  return call(key, model, 'generateContent', body, timeoutMs);
 }
 
 /**
@@ -33,7 +48,7 @@ export function generate(key, model, body) {
  * 24 kHz, and the caller resamples to the 16 kHz the codec runs at.
  */
 export async function synthesize(key, model, body) {
-  const res = await call(key, model, 'generateContent', body);
+  const res = await call(key, model, 'generateContent', body, SPEECH_TIMEOUT_MS);
   const part = res?.candidates?.[0]?.content?.parts?.find((p) => p.inlineData);
   if (!part) {
     const err = new Error('gemini tts returned no audio');
