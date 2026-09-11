@@ -6,13 +6,13 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 KEY=$(sed -n 's/^ELEVENLABS_API_KEY=//p' .dev.vars | head -1)
 [ -n "$KEY" ] || { echo "ELEVENLABS_API_KEY missing from .dev.vars" >&2; exit 1; }
-KIDBOT_VOICE_CACHE=/tmp/kidbot_voices.json
-[ -s "$KIDBOT_VOICE_CACHE" ] || curl -sf \
+CHIKI_VOICE_CACHE=/tmp/chiki_voices.json
+[ -s "$CHIKI_VOICE_CACHE" ] || curl -sf \
   "https://api.elevenlabs.io/v1/shared-voices?language=he&page_size=100" \
-  -H "xi-api-key: $KEY" > "$KIDBOT_VOICE_CACHE"
+  -H "xi-api-key: $KEY" > "$CHIKI_VOICE_CACHE"
 
 if [ -z "${1:-}" ]; then
-  python3 - "$KIDBOT_VOICE_CACHE" <<'EOF'
+  python3 - "$CHIKI_VOICE_CACHE" <<'EOF'
 import json, sys
 vs = json.load(open(sys.argv[1]))["voices"]
 vs.sort(key=lambda v: -(v.get("cloned_by_count") or 0))
@@ -22,7 +22,7 @@ for i, v in enumerate(vs[:25]):
 EOF
   printf '\naudition: %s <row>    then set ELEVEN_VOICE_ID in .dev.vars\n' "$0"
 else
-  URL=$(python3 - "$KIDBOT_VOICE_CACHE" "$1" <<'EOF'
+  URL=$(python3 - "$CHIKI_VOICE_CACHE" "$1" <<'EOF'
 import json, sys
 vs = json.load(open(sys.argv[1]))["voices"]
 vs.sort(key=lambda v: -(v.get("cloned_by_count") or 0))
@@ -30,5 +30,5 @@ v = vs[int(sys.argv[2])]
 print(v["preview_url"]); import sys as s; print(f'{v["name"]}  {v["voice_id"]}', file=s.stderr)
 EOF
   )
-  curl -sf "$URL" -o /tmp/kidbot_preview.mp3 && afplay /tmp/kidbot_preview.mp3
+  curl -sf "$URL" -o /tmp/chiki_preview.mp3 && afplay /tmp/chiki_preview.mp3
 fi

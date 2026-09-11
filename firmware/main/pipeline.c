@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "face.h"
 #include "net.h"
+#include "ws_message.h"
 #include <stdatomic.h>
 #include <string.h>
 #include "cJSON.h"
@@ -39,8 +40,7 @@ static esp_websocket_client_handle_t s_ws;
 static StreamBufferHandle_t s_play, s_tx;
 static uint8_t *s_acc, *s_dec, *s_tx_pcm;
 static char *s_mic_json;
-static size_t s_acc_len;
-static bool s_acc_drop;
+static ws_message_state_t s_ws_message;
 static volatile bool s_ws_up;
 static volatile bool s_end_req;
 static volatile int s_pong_id = -1;
@@ -154,20 +154,18 @@ static void ws_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (e->op_code != 0x01 && e->op_code != 0x00) {
             break;                          // text + continuation only
         }
-        if (e->payload_offset == 0) {
-            s_acc_len = 0;
-            s_acc_drop = e->payload_len > ACC_CAP - 1;
-            if (s_acc_drop) {
-                ESP_LOGW(TAG, "dropping %d byte message", e->payload_len);
+        bool was_dropping = s_ws_message.dropping;
+        ws_message_result_t result = ws_message_append(
+            &s_ws_message, s_acc, ACC_CAP - 1, e->data_ptr, e->data_len,
+            e->op_code, e->fin, e->payload_len, e->payload_offset);
+        if (result == WS_MESSAGE_DROP) {
+            if (!was_dropping) {
+                ESP_LOGW(TAG, "dropping invalid ws fragment len=%d offset=%d total=%d",
+                         e->data_len, e->payload_offset, e->payload_len);
             }
-        }
-        if (!s_acc_drop && e->data_len > 0) {
-            memcpy(s_acc + s_acc_len, e->data_ptr, e->data_len);
-            s_acc_len += e->data_len;
-            if ((int)s_acc_len == e->payload_len) {
-                s_acc[s_acc_len] = 0;
-                on_message((char *)s_acc, s_acc_len);
-            }
+        } else if (result == WS_MESSAGE_COMPLETE) {
+            s_acc[s_ws_message.length] = 0;
+            on_message((char *)s_acc, s_ws_message.length);
         }
         break;
     }
@@ -261,7 +259,7 @@ static void session(void)
         goto fail;
     }
 
-    s_acc_len = 0;
+    ws_message_reset(&s_ws_message);
     s_pong_id = -1;
     s_play_dropped = 0;
     s_tx_stop = false;

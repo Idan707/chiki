@@ -44,7 +44,7 @@ def dev_var(name):
 
 
 HEADERS = {"xi-api-key": dev_var("ELEVENLABS_API_KEY"),
-           "Content-Type": "application/json", "User-Agent": "kidbot-tests/1.0"}
+           "Content-Type": "application/json", "User-Agent": "chiki-tests/1.0"}
 
 
 def api(path, method="GET", body=None):

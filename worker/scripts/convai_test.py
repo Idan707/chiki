@@ -38,7 +38,7 @@ def session_info():
     return request_json(
         dev_var("WORKER_URL").rstrip("/") + "/session?progress=0",
         {"Authorization": "Bearer " + dev_var("DEVICE_TOKEN"),
-         "User-Agent": "kidbot-test/1.0"},  # CF edge rejects urllib's default UA
+         "User-Agent": "chiki-test/1.0"},  # CF edge rejects urllib's default UA
     )
 
 
@@ -153,7 +153,7 @@ async def run(question):
 
 def conversation_details(conversation_id):
     headers = {"xi-api-key": dev_var("ELEVENLABS_API_KEY"),
-               "User-Agent": "kidbot-test/1.0"}
+               "User-Agent": "chiki-test/1.0"}
     url = f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}"
     for _ in range(15):
         details = request_json(url, headers)

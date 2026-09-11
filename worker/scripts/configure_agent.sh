@@ -136,7 +136,10 @@ BODY=$(jq -n \
           max_soft_timeouts_per_generation:3, disable_until_first_user_message:false
         }
       },
-      conversation: {client_events:["audio","ping","user_transcript","agent_response","agent_response_complete"]},
+      conversation: {
+        max_duration_seconds:600,
+        client_events:["audio","ping","user_transcript","agent_response","agent_response_complete"]
+      },
       agent: {
         language:"he", first_message:$first_message,
         prompt:{prompt:$prompt, llm:"gpt-5.6-luna"},
@@ -228,6 +231,7 @@ printf '%s' "$LIVE" | jq -e \
   .conversation_config.turn.turn_timeout == 15 and
   .conversation_config.turn.turn_eagerness == "normal" and
   .conversation_config.turn.soft_timeout_config.timeout_seconds == 2.5 and
+  .conversation_config.conversation.max_duration_seconds == 600 and
   .conversation_config.conversation.client_events ==
     ["audio","ping","user_transcript","agent_response","agent_response_complete"] and
   .platform_settings.auth.enable_auth == true and

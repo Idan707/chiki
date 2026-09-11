@@ -76,6 +76,7 @@ static int esp_http_client_read(esp_http_client_handle_t client, char *out, int 
 }
 
 #include "net.c"
+#include "ws_message.h"
 
 static void reply(const char *body, size_t chunk) {
     response = body;
@@ -85,6 +86,36 @@ static void reply(const char *body, size_t chunk) {
     status = 200;
     // Headers may already have buffered the entire body before the first read.
     complete = true;
+}
+
+static void test_ws_fragments(void) {
+    uint8_t buffer[9] = {0};
+    ws_message_state_t state;
+    ws_message_reset(&state);
+    buffer[8] = 0xa5;
+
+    assert(ws_message_append(&state, buffer, 8, "abcd", 4, 0x01, true, 8, 0) == WS_MESSAGE_MORE);
+    assert(ws_message_append(&state, buffer, 8, "efgh", 4, 0x01, true, 8, 4) == WS_MESSAGE_COMPLETE);
+    assert(state.length == 8 && !memcmp(buffer, "abcdefgh", 8) && buffer[8] == 0xa5);
+
+    ws_message_reset(&state);
+    assert(ws_message_append(&state, buffer, 8, "abc", 3, 0x01, false, 3, 0) == WS_MESSAGE_MORE);
+    assert(ws_message_append(&state, buffer, 8, "def", 3, 0x00, true, 3, 0) == WS_MESSAGE_COMPLETE);
+    assert(state.length == 6 && !memcmp(buffer, "abcdef", 6));
+
+    ws_message_reset(&state);
+    assert(ws_message_append(&state, buffer, 8, "abc", 3, 0x01, true, 4, 0) == WS_MESSAGE_MORE);
+    assert(ws_message_append(&state, buffer, 8, "de", 2, 0x01, true, 4, 3) == WS_MESSAGE_DROP);
+    assert(state.length == 3 && buffer[8] == 0xa5);
+
+    ws_message_reset(&state);
+    assert(ws_message_append(&state, buffer, 8, "abcd", 4, 0x01, true, 9, 0) == WS_MESSAGE_DROP);
+    assert(state.length == 0 && buffer[8] == 0xa5);
+
+    ws_message_reset(&state);
+    assert(ws_message_append(&state, buffer, 8, "a", 1, 0x01, true, 4, 0) == WS_MESSAGE_MORE);
+    assert(ws_message_append(&state, buffer, 8, "b", 1, 0x01, true, 4, 2) == WS_MESSAGE_DROP);
+    assert(buffer[8] == 0xa5);
 }
 
 int main(void) {
@@ -121,5 +152,6 @@ int main(void) {
     reply("{\"version\":1}", 2);
     assert(net_get_progress(dyn, sizeof(dyn)) == ESP_OK);
     assert(!strcmp(dyn, "{\"version\":1}"));
-    puts("net.c: fragmented, buffered, oversized, unauthorized and truncated responses passed");
+    test_ws_fragments();
+    puts("firmware host checks: HTTP parsing and bounded WebSocket reassembly passed");
 }

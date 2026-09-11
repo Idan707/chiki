@@ -127,7 +127,7 @@ async function handle(request, env) {
 
   if (request.method === 'GET' && url.pathname === '/progress') {
     if (!env.DEVICE_TOKEN) {
-      console.log('[kidbot] DEVICE_TOKEN is missing');
+      console.log('[chiki] DEVICE_TOKEN is missing');
       return json({ error: 'service unavailable' }, 503);
     }
     if (!tokenOk(request.headers.get('Authorization'), env.DEVICE_TOKEN))
@@ -139,7 +139,7 @@ async function handle(request, env) {
   if (request.method === 'GET' && url.pathname === '/session') {
     const missing = missingSessionSecrets(env);
     if (missing.length) {
-      console.log(`[kidbot] session secrets missing: ${missing.join(',')}`);
+      console.log(`[chiki] session secrets missing: ${missing.join(',')}`);
       return json({ error: 'service unavailable' }, 503);
     }
     if (!tokenOk(request.headers.get('Authorization'), env.DEVICE_TOKEN))
@@ -147,7 +147,7 @@ async function handle(request, env) {
 
     const cap = parseDailyCap(env.SESSION_DAILY_CAP);
     if (cap === null) {
-      console.log('[kidbot] SESSION_DAILY_CAP must be a positive integer');
+      console.log('[chiki] SESSION_DAILY_CAP must be a positive integer');
       return json({ error: 'service unavailable' }, 503);
     }
 
@@ -165,7 +165,7 @@ async function handle(request, env) {
     if (!su.ok) return upstreamFail('signed-url', su);
     const signedUrl = (await su.json()).signed_url;
     if (typeof signedUrl !== 'string' || !signedUrl.startsWith('wss://')) {
-      console.log('[kidbot] signed-url response missing signed_url');
+      console.log('[chiki] signed-url response missing signed_url');
       return json({ error: 'upstream unavailable' }, 502);
     }
     const adventure = adventureFor(

@@ -50,6 +50,7 @@ Cloud deployment and agent changes are maintainer-only manual actions. Never run
 - PCM is always 16 kHz, signed 16-bit, mono in both directions.
 - Keep half duplex: upload microphone PCM only while listening; upload equal-duration zero PCM while buffering, playing, and flushing microphone input.
 - Playback ends only after `agent_response_complete` and an empty playback queue. Packet gaps are not response boundaries.
+- Treat WebSocket lengths, offsets, and continuation frames as untrusted; validate bounded reassembly before every copy.
 - A ten-second audio stall without completion ends the session; it must never reopen microphone upload by pretending the response completed.
 - Keep `PREBUFFER` in `firmware/main/pipeline.c` as a hardware calibration knob. The current `48,000` bytes is the measured 1.5-second setting.
 - Keep automatic WebSocket reconnect disabled because a signed raw conversation cannot be resumed safely.

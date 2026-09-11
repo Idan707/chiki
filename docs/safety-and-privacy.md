@@ -54,6 +54,7 @@ Before use:
 4. Explain the listening indicator and tap controls to the child.
 5. Supervise real conversations and have a plan for harmful, surprising, or emergency content.
 6. Rotate secrets and stop service access if a device is lost.
+7. Keep the ten-minute conversation cap, provider concurrency limit, and billing/overage settings appropriate for your budget; the Worker daily cap counts signed-URL issuance, not minutes.
 
 Useful regulatory design references include the [FTC COPPA rule](https://www.ftc.gov/system/files/ftc_gov/pdf/coppa_sbp_1.16_0.pdf) and the UK ICO's [best-interests framework for connected toys and devices](https://ico.org.uk/for-organisations/uk-gdpr-guidance-and-resources/childrens-information/childrens-code-guidance-and-resources/how-to-use-our-guidance-for-standard-one-best-interests-of-the-child/best-interests-framework/processing-data-through-connected-toys-and-devices/). They are starting points for qualified advice, not evidence that this project complies with any law.
 
