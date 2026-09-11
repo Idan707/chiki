@@ -20,6 +20,7 @@ import asyncio
 import base64
 import json
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 import wave
@@ -221,7 +222,8 @@ def main():
     p.add_argument("--model", default="gemini-2.5-flash-native-audio-latest")
     p.add_argument("--tts", metavar="TEXT", help="synthesize Hebrew and save it")
     p.add_argument("--tts-model", default="gemini-2.5-flash-preview-tts")
-    p.add_argument("--out", default="voice.wav")
+    p.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "chiki-voice.wav"),
+                   help="written outside the repo by default; audio must never be committed")
     p.add_argument("--system", default="אתה חבר הרפתקאות של ילד בן חמש. "
                    "ענה בעברית פשוטה, שניים עד שלושה משפטים קצרים.")
     args = p.parse_args()

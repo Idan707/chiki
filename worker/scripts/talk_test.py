@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import json
 import sys
+import tempfile
 import time
 import urllib.request
 import wave
@@ -136,7 +137,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("wav", help=f"{RATE} Hz mono WAV to speak")
     p.add_argument("--turns", type=int, default=1)
-    p.add_argument("--out", default="reply.wav")
+    p.add_argument("--out", default=str(Path(tempfile.gettempdir()) / "chiki-reply.wav"),
+                   help="written outside the repo by default; audio must never be committed")
     a = p.parse_args()
     asyncio.run(run(Path(a.wav), a.turns, a.out))
 

@@ -19,3 +19,9 @@ firmware/sdkconfig.old
 gen-lang-client-*.json
 *service*account*.json
 *-key.json
+
+# Audio never belongs here (AGENTS.md: no recordings or audio fixtures), and
+# the test scripts produce it. One slipped into history once via git add -A.
+*.wav
+*.pcm
+*.mp3
