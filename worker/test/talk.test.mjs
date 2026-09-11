@@ -152,6 +152,22 @@ test('a letter stranded by a mid-word cut is dropped', () => {
     'עננים עשויים מטיפות');
 });
 
+// Seen on the device: "3 מעולה" read aloud as "three, great".
+test('debris left ahead of the Hebrew is dropped', () => {
+  assert.equal(hebrewOnly('Response 3: מעולה, זורמים איתך!'), 'מעולה, זורמים איתך!');
+});
+
+// Seen on the device: "אני חבר | | ההרפתקאות שלך".
+test('markdown table pipes are never read aloud', () => {
+  assert.equal(screenReply(ok('אני חבר | | ההרפתקאות שלך')).speak, 'אני חבר ההרפתקאות שלך');
+});
+
+// Seen on the device: Chiki said "בלשון זכר" out loud to a five-year-old.
+test('the prompt forbids reciting its own grammar rule', () => {
+  const p = systemPrompt(CHILD, ADVENTURE);
+  assert.ok(p.includes('אל תשתמש במילים כמו "לשון זכר"'));
+});
+
 test('a reply with no Hebrew left is empty, so the safe line is spoken', () => {
   assert.equal(hebrewOnly('Let me think about how to phrase this.'), '');
 });

@@ -18,3 +18,9 @@ CONFIG_LV_BIDI_DIR_AUTO=y
 
 # TLS buffers in PSRAM - internal DMA heap must stay free for display SPI bounce buffers
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
+# The draw buffer lives in PSRAM, so every redraw makes spi_master allocate a
+# contiguous internal DMA bounce buffer of width*height*2. At 100 lines that is
+# 73,600 bytes, and once TLS has fragmented the internal heap the allocation
+# fails and the display stops updating mid-session. 30 lines needs 22,080.
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=30

@@ -292,6 +292,11 @@ static void session(void)
     // against the ticket, so it opens the conversation on its own. dyn is kept
     // only as a diagnostic that the pairing is intact.
     ESP_LOGI(TAG, "adventure: %s", dyn[0] ? dyn : "(worker-side)");
+    // The LCD competes for this: if the largest block drops below the draw
+    // buffer the screen stops updating and never recovers.
+    ESP_LOGI(TAG, "internal dma at session: free=%u largest=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
     tx_started = xTaskCreate(tx_task, "audio_tx", 6144, NULL, 4, NULL) == pdPASS;
     if (!tx_started) {
         ESP_LOGE(TAG, "audio sender task creation failed");
