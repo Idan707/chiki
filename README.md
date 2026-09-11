@@ -78,7 +78,7 @@ You need:
 - Python 3.11+, `ffmpeg`, `curl`, `jq`, and ShellCheck for all host checks;
 - Cloudflare Workers and ElevenLabs accounts.
 
-Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. The daily cap limits URL issuance, not total billed minutes: [signed URLs can be reused until they expire](https://elevenlabs.io/docs/eleven-agents/customization/authentication). Set provider-side spending and concurrency limits too. Chiki has no automatic deployment and CI never deploys production.
+Cloudflare and ElevenLabs may charge for usage. Review their current pricing and data-processing terms before enabling a device. The daily cap limits URL issuance, not total billed minutes: [signed URLs can be reused until they expire](https://elevenlabs.io/docs/eleven-agents/customization/authentication). The agent configuration caps each conversation at ten minutes; keep provider burst pricing and pay-as-you-go top-ups disabled unless you intend to use them, and review the workspace concurrency limit. Chiki has no automatic deployment and CI never deploys production.
 
 ## Quick start
 

@@ -11,7 +11,7 @@ CJSON = Path(os.environ["IDF_PATH"]) / "components/json/cJSON"
 
 with tempfile.TemporaryDirectory(prefix="chiki-net-test-") as directory:
     temp = Path(directory)
-    for name in ("net.c", "net.h"):
+    for name in ("net.c", "net.h", "ws_message.h"):
         shutil.copyfile(ROOT / "main" / name, temp / name)
     shutil.copyfile(ROOT / "main/wifi_creds.h.example", temp / "wifi_creds.h")
     for name in ("esp_err.h", "esp_crt_bundle.h", "esp_event.h", "esp_http_client.h",

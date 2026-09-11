@@ -31,7 +31,7 @@ Chiki separates local interaction, session authorization, cloud conversation, an
 6. Playback is complete only after `agent_response_complete` and an empty playback queue. Network packet gaps are not boundaries.
 7. A short tap ends the socket with WebSocket close code `1000`. Automatic reconnect is disabled because a signed raw conversation cannot be resumed safely.
 
-Session JSON is read completely across HTTP fragments. Missing or oversized dynamic variables fail the session instead of silently dropping the adventure or progress settings. A ten-second audio stall without `agent_response_complete` closes the session; it is never interpreted as successful completion.
+Session JSON is read completely across HTTP fragments. Missing or oversized dynamic variables fail the session instead of silently dropping the adventure or progress settings. WebSocket text and continuation fragments are reassembled only after their offsets and lengths pass the fixed buffer bounds. A ten-second audio stall without `agent_response_complete` closes the session; it is never interpreted as successful completion.
 
 Opening lines vary with time since the last session started. Only webhook-confirmed exploration can supply the previous topic; merely offering an adventure does not create a memory of exploring it.
 

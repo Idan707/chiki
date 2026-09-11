@@ -34,7 +34,7 @@ test('accepts only enabled, completed Chiki transcription fixtures', () => {
   const event = {
     type: 'post_call_transcription', event_timestamp: 1_800_000_000,
     data: {
-      agent_id: 'kidbot', conversation_id: 'conversation-1', status: 'done',
+      agent_id: 'chiki', conversation_id: 'conversation-1', status: 'done',
       transcript: [
         { role: 'user', message: 'למה הירח משנה צורה?' },
         { role: 'agent', message: 'אנחנו רואים חלקים שונים של הצד המואר של הירח לאורך החודש.' },
@@ -43,14 +43,14 @@ test('accepts only enabled, completed Chiki transcription fixtures', () => {
       conversation_initiation_client_data: { dynamic_variables: { progress_enabled: true } },
     },
   };
-  assert.deepEqual(progressEvent(event, 'kidbot', 1_800_000_000_000)?.topics, ['space']);
+  assert.deepEqual(progressEvent(event, 'chiki', 1_800_000_000_000)?.topics, ['space']);
   assert.equal(progressEvent(event, undefined, 1_800_000_000_000), null);
-  assert.equal(progressEvent(event, 'kidbot', 1_800_000_000_000 + 3 * 86_400_000), null);
-  assert.equal(progressEvent(event, 'kidbot', 1_800_000_000_000 - 600_000), null);
+  assert.equal(progressEvent(event, 'chiki', 1_800_000_000_000 + 3 * 86_400_000), null);
+  assert.equal(progressEvent(event, 'chiki', 1_800_000_000_000 - 600_000), null);
   assert.equal(progressEvent(event, 'another-agent'), null);
-  assert.equal(progressEvent({ ...event, type: 'post_call_audio' }, 'kidbot'), null);
+  assert.equal(progressEvent({ ...event, type: 'post_call_audio' }, 'chiki'), null);
   event.data.conversation_initiation_client_data.dynamic_variables.progress_enabled = false;
-  assert.equal(progressEvent(event, 'kidbot'), null);
+  assert.equal(progressEvent(event, 'chiki'), null);
 });
 
 test('expiry prunes old day-level history and identifiers but preserves lifetime totals', () => {
